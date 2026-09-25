@@ -28,8 +28,8 @@ This plugin adds a **statistics** seat next to it, inside the right Sidebar:
 
 | | |
 |---|---|
-| Counts | 合计 / 运行中 / 已完成 / 已失败 / 已取消 (total / running / completed / failed / cancelled) |
-| Figures | success rate (completed ÷ settled), accumulated duration, longest single job, retained output bytes |
+| Counts | 合计 / 运行中 / 已完成 / 已失败 / 已取消 / 已结束 (total / running / completed / failed / cancelled / ended) |
+| Figures | success rate over reported outcomes (completed ÷ settled), accumulated duration, longest single job, retained output bytes |
 | Detail list | one row per task: status dot, command label, kind · status · reason, elapsed time |
 | Live clock | running jobs tick once a second while the tab is open |
 | Ledger | per-session, merged by job id, persisted in browser storage (300 records, oldest settled evicted first) |
@@ -81,12 +81,13 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 
 1. While the tab is mounted it holds the session's roster stream open (`ctx.jobs.watchRows(sessionId)`); the stream's first frame is already the whole truth.
 2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
-3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v1/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only).
+3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
 
 ### Known limits
 
 - The ledger records what the tab saw **while it was open**. A job that starts and ends entirely while the tab is closed is not replayed by the roster, so it cannot be counted.
-- A record that is still marked running but has left the roster has its clock frozen at the last sighting (its duration stops rather than growing forever), and keeps its last known status.
+- **A collected command's outcome is not observable.** The Host removes a foreground command's record as soon as the call that started it collected the output, often inside the same coalescing window that would have reported the settlement — so the panel sees it running and then gone. Those records are shown as **已结束 / ended** with *outcome not reported* rather than being guessed into 已完成 or 已失败; the success-rate figure therefore covers reported outcomes only. Jobs that keep their record (a `run_in_background` job, a promoted command, anything whose output nobody collected yet) do report a real terminal status.
+- An ended record's duration is the time from its start to its last sighting, which is when the Host retired it (within a second or so).
 - The ledger is capped at 300 records per session; the oldest settled records are evicted first.
 - The panel is read-only: stopping a job stays in the session header's job list.
 

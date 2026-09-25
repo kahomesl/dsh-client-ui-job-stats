@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-09-25
+
+### Fixed
+
+- **A collected command no longer stays "running" forever.** The Host removes a foreground command's record as soon as the call that started it collected the output — frequently inside the same coalescing window that would have reported its settlement — so no roster frame ever carried the outcome. The panel recorded the last thing it saw (`running`) and kept it. Such a record is now projected as **已结束 / ended** with the detail *outcome not reported*: it is over, it is no longer counted as running, and the panel does not claim success or failure it cannot know.
+- **Long commands no longer report a 0-second duration.** A running record's clock is now refreshed while the roster still lists it, instead of being frozen at the last lifecycle frame (which for a 30-second command was its own start).
+- A record hydrated from browser storage that claims to still be running is dropped: it has no stream behind it any more, and the roster re-supplies it while the job is genuinely alive.
+
+### Added
+
+- A sixth card, **已结束 / Ended**, so the status cards still add up to the accumulated total. The success-rate figure counts reported outcomes only and carries a tooltip saying so.
+
+### Changed
+
+- The ledger's browser-storage key moved to `dsh-job-stats/v2/`: the records written by 1.0.0 carry the stuck `running` status this release fixes, so the panel starts from a clean ledger rather than showing them as zero-second ended rows.
+
 ## [1.0.0] — 2026-09-25
 
 First public release.

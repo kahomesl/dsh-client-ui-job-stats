@@ -41,7 +41,9 @@ window.__ModuleLoader__.load({
       metricCompleted: '已完成',
       metricFailed: '已失败',
       metricKilled: '已取消',
+      metricEnded: '已结束',
       statSuccessRate: '完成率',
+      statSuccessRateHint: '仅统计已上报结果的任务（不含结果未上报的已结束任务）',
       statElapsed: '累计耗时',
       statLongest: '最长耗时',
       statOutput: '保留输出',
@@ -59,7 +61,9 @@ window.__ModuleLoader__.load({
       statusCompleted: '已完成',
       statusFailed: '已失败',
       statusKilled: '已取消',
+      statusEnded: '已结束',
       statusUnknown: '状态未知',
+      detailUnreported: '结果未上报',
       rowUntitled: '（未命名任务）',
       rowUnknownKind: '未知类型',
       durationUnknown: '—',
@@ -81,7 +85,9 @@ window.__ModuleLoader__.load({
       metricCompleted: 'Completed',
       metricFailed: 'Failed',
       metricKilled: 'Cancelled',
+      metricEnded: 'Ended',
       statSuccessRate: 'Success rate',
+      statSuccessRateHint: 'reported outcomes only (ended jobs whose outcome was not reported are excluded)',
       statElapsed: 'Total time',
       statLongest: 'Longest',
       statOutput: 'Retained output',
@@ -99,7 +105,9 @@ window.__ModuleLoader__.load({
       statusCompleted: 'completed',
       statusFailed: 'failed',
       statusKilled: 'cancelled',
+      statusEnded: 'ended',
       statusUnknown: 'unknown status',
+      detailUnreported: 'outcome not reported',
       rowUntitled: '(untitled job)',
       rowUnknownKind: 'unknown kind',
       durationUnknown: '—',
@@ -119,6 +127,9 @@ window.__ModuleLoader__.load({
       completed: 'var(--dsw-alias-state-success-primary, #16a34a)',
       failed: 'var(--dsw-alias-state-error-primary, #dc2626)',
       killed: 'var(--dsw-alias-state-warn-label, #f59e0b)',
+      // A record the Host removed before reporting an outcome: it is over, but
+      // saying whether it succeeded would be a guess.
+      ended: 'var(--dsw-alias-label-tertiary, currentColor)',
       unknown: 'var(--dsw-alias-label-tertiary, currentColor)',
     };
 
@@ -129,7 +140,11 @@ window.__ModuleLoader__.load({
       ));
     }
 
-    /** The closed status union read defensively: an unknown wire status counts as unknown. */
+    /**
+     * The closed status union read defensively: an unknown wire status counts as unknown.
+     * `ended` is this plugin's own terminal state for a job the Host removed while
+     * it was still running here, so it never counts as live again.
+     */
     function statusOf(job) {
       const status = job === null || typeof job !== 'object' ? undefined : job.status;
       switch (status) {
@@ -138,6 +153,7 @@ window.__ModuleLoader__.load({
         case 'completed':
         case 'failed':
         case 'killed':
+        case 'ended':
           return status;
         default:
           return 'unknown';
@@ -158,6 +174,7 @@ window.__ModuleLoader__.load({
         case 'completed': return 'statusCompleted';
         case 'failed': return 'statusFailed';
         case 'killed': return 'statusKilled';
+        case 'ended': return 'statusEnded';
         default: return 'statusUnknown';
       }
     }
@@ -201,8 +218,14 @@ window.__ModuleLoader__.load({
 
     /** How many jobs one session's accumulated ledger keeps. */
     const LEDGER_LIMIT = 300;
-    /** Browser-storage key prefix for the accumulated ledger. */
-    const LEDGER_KEY = 'dsh-job-stats/v1/';
+    /**
+     * Browser-storage key prefix for the accumulated ledger.
+     *
+     * v2: only terminal records are hydrated (a record hydrated as "running" has no
+     * stream behind it any more, and the roster re-supplies it when the job is still
+     * alive), and the Host's own removal semantics are projected as `ended`.
+     */
+    const LEDGER_KEY = 'dsh-job-stats/v2/';
     /** Per-session accumulated ledgers, one plugin module instance wide. */
     const ledgers = new Map();
 
@@ -227,9 +250,12 @@ window.__ModuleLoader__.load({
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : undefined;
         if (Array.isArray(parsed)) {
           for (const record of parsed) {
-            if (record !== null && typeof record === 'object' && typeof record.id === 'string' && record.id !== '') {
-              entry.records.set(record.id, record);
-            }
+            if (record === null || typeof record !== 'object') continue;
+            if (typeof record.id !== 'string' || record.id === '') continue;
+            // Only terminal records survive a reload: one hydrated as running has no
+            // stream behind it any more, and the roster re-supplies it while alive.
+            if (isLive(record) || statusOf(record) === 'unknown') continue;
+            entry.records.set(record.id, record);
           }
         }
       } catch {
@@ -325,8 +351,35 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The accumulated rows to render: every recorded job, with a live row that left
-     * the roster frozen at its last sighting instead of counting up forever.
+     * Keep a live record's clock moving while the roster still lists it.
+     *
+     * The roster only refreshes on lifecycle commits, so a long command produces no
+     * frame between its start and its settlement; without this touch its duration
+     * would freeze at the start when it disappears.
+     * @param sessionId - the watched session.
+     * @param liveIds - ids the current roster lists.
+     */
+    function touch(sessionId, liveIds) {
+      if (sessionId === undefined || liveIds.size === 0) return;
+      const entry = ledgers.get(sessionId);
+      if (entry === undefined) return;
+      const seenAt = Date.now();
+      for (const id of liveIds) {
+        const record = entry.records.get(id);
+        if (record !== undefined && isLive(record)) record.seenAt = seenAt;
+      }
+    }
+
+    /**
+     * The accumulated rows to render.
+     *
+     * The Host removes a foreground command's record the moment the call that
+     * started it collected the output — often inside the same coalescing window
+     * that would have reported its settlement, so no frame ever carries the
+     * outcome. A record this tab saw running and that the roster no longer lists is
+     * therefore projected as `ended`: it is over, its clock stops at the last
+     * sighting, and the panel says the outcome was not reported instead of claiming
+     * it is still running.
      * @param sessionId - the session the tab belongs to.
      * @param liveIds - ids the current roster still lists.
      * @returns the records, unordered.
@@ -339,7 +392,9 @@ window.__ModuleLoader__.load({
       if (entry.records.size === 0) return NO_JOBS;
       const rows = [];
       for (const record of entry.records.values()) {
-        rows.push(isLive(record) && !liveIds.has(record.id) ? { ...record, finishedAt: record.seenAt } : record);
+        rows.push(isLive(record) && !liveIds.has(record.id)
+          ? { ...record, status: 'ended', finishedAt: record.seenAt, unreported: true }
+          : record);
       }
       return rows;
     }
@@ -352,7 +407,7 @@ window.__ModuleLoader__.load({
      * @returns counts per status, settled total, success rate, and duration/byte totals.
      */
     function summarize(rows, now) {
-      const counts = { total: 0, running: 0, stopping: 0, completed: 0, failed: 0, killed: 0, unknown: 0 };
+      const counts = { total: 0, running: 0, stopping: 0, completed: 0, failed: 0, killed: 0, ended: 0, unknown: 0 };
       let retainedBytes = 0;
       let elapsed = 0;
       let longest = 0;
@@ -450,7 +505,8 @@ window.__ModuleLoader__.load({
       const rawKind = job === null || typeof job !== 'object' ? undefined : job.kind;
       const kind = typeof rawKind === 'string' && rawKind !== '' ? rawKind : t('rowUnknownKind');
       const statusText = t(statusLabelKey(status));
-      const detail = jobDetail(job);
+      const reported = jobDetail(job);
+      const detail = reported === undefined && job?.unreported === true ? t('detailUnreported') : reported;
       const meta = detail === undefined ? `${kind} · ${statusText}` : `${kind} · ${statusText} · ${detail}`;
       const elapsed = durationMs(job, now);
       return h('li', {
@@ -487,12 +543,13 @@ window.__ModuleLoader__.load({
       ]);
     }
 
-    /** One labelled secondary figure in the dock. */
-    function DockFigure({ stat, label, value }) {
+    /** One labelled secondary figure in the dock; `hint` explains what it counts. */
+    function DockFigure({ stat, label, value, hint }) {
       return h('div', {
         'data-role': 'stat',
         'data-stat': stat,
         style: dockStyles.figure,
+        ...(hint === undefined ? {} : { title: hint }),
       }, [
         h('span', { key: 'label', style: dockStyles.figureLabel }, label),
         h('span', { key: 'value', style: dockStyles.figureValue }, value),
@@ -552,6 +609,12 @@ window.__ModuleLoader__.load({
       );
       const live = liveRows.some(isLive);
 
+      // Keep the clock of a running record honest while the roster lists it: a long
+      // command produces no frame between its start and its settlement.
+      React.useEffect(() => {
+        touch(sessionId, liveIds);
+      }, [sessionId, liveIds, now]);
+
       React.useEffect(() => {
         if (sessionId === undefined || typeof watchRows !== 'function') return undefined;
         try {
@@ -608,6 +671,9 @@ window.__ModuleLoader__.load({
           h(DockMetric, { key: 'completed', metric: 'completed', label: t('metricCompleted'), value: stats.completed, tone: 'completed' }),
           h(DockMetric, { key: 'failed', metric: 'failed', label: t('metricFailed'), value: stats.failed, tone: 'failed' }),
           h(DockMetric, { key: 'killed', metric: 'killed', label: t('metricKilled'), value: stats.killed, tone: 'killed' }),
+          // A record the Host removed before reporting its outcome: counted here so
+          // the cards still add up to the total, without claiming success or failure.
+          h(DockMetric, { key: 'ended', metric: 'ended', label: t('metricEnded'), value: stats.ended, tone: 'ended' }),
         ]),
         h('div', { key: 'figures', style: dockStyles.figures }, [
           h(DockFigure, {
@@ -615,6 +681,9 @@ window.__ModuleLoader__.load({
             stat: 'successRate',
             label: t('statSuccessRate'),
             value: stats.successRate === undefined ? t('durationUnknown') : t('percent', { value: Math.round(stats.successRate * 100) }),
+            // Reported outcomes only: jobs the Host removed before reporting theirs
+            // would otherwise be silently scored as failures.
+            hint: t('statSuccessRateHint'),
           }),
           h(DockFigure, {
             key: 'elapsed',

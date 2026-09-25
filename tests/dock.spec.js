@@ -402,25 +402,77 @@ describe('accumulated ledger', () => {
     expect(view.container.textContent).toContain('exit 2');
   });
 
-  test('freezes the clock of a live job that left the roster', () => {
+  test('a live record that leaves the roster ends instead of running forever', () => {
     vi.useFakeTimers();
     try {
       const started = Date.now() - 60_000;
       const { harness, view } = mountLive({
-        rows: { 'session-tab': [job({ id: 'live', label: '还在跑的命令', status: 'running', startedAt: started, finishedAt: undefined })] },
+        rows: { 'session-tab': [job({ id: 'live', label: '跑完就没影的命令', status: 'running', startedAt: started, finishedAt: undefined })] },
       });
+      expect(figure(view.container, 'metric', 'running')).toBe('1');
       expect(view.container.textContent).toContain('1分');
 
-      // The record vanishes from the roster; the row must stop counting up.
+      // The Host removes a foreground command's record as soon as its call collected
+      // the output — often inside the coalescing window that would have reported the
+      // settlement — so no frame ever carries the outcome.
       act(() => {
         harness.roster.set('session-tab', []);
       });
+      expect(figure(view.container, 'metric', 'running')).toBe('0');
+      expect(figure(view.container, 'metric', 'ended')).toBe('1');
+      expect(figure(view.container, 'metric', 'completed')).toBe('0');
+      expect(figure(view.container, 'metric', 'failed')).toBe('0');
+      // The row says it ended and that the outcome was never reported, rather than
+      // claiming success, failure, or that it is still running.
+      const [row] = rows(view.container);
+      expect(row.getAttribute('data-status')).toBe('ended');
+      expect(row.textContent).toContain('已结束');
+      expect(row.textContent).toContain('结果未上报');
+
+      // Its clock stops at the last sighting instead of counting up forever.
       vi.setSystemTime(Date.now() + 300_000);
-      expect(figure(view.container, 'metric', 'running')).toBe('1');
       expect(rows(view.container)[0].textContent).toContain('1分0秒');
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test('times a long command by its last sighting, not by the frame that started it', () => {
+    vi.useFakeTimers();
+    try {
+      // A long command produces no roster frame between its start and its
+      // settlement, so a clock fed only by frames would report 0 seconds.
+      const started = Date.now();
+      const { harness, view } = mountLive({
+        rows: { 'session-tab': [job({ id: 'long', label: '长命令', status: 'running', startedAt: started, finishedAt: undefined })] },
+      });
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(rows(view.container)[0].textContent).toContain('30秒');
+
+      act(() => {
+        harness.roster.set('session-tab', []);
+      });
+      expect(figure(view.container, 'metric', 'ended')).toBe('1');
+      expect(rows(view.container)[0].textContent).toContain('30秒');
+      expect(figure(view.container, 'stat', 'elapsed')).toBe('30秒');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('the status cards add up to the accumulated total', () => {
+    const { view } = renderDock([
+      job({ id: 'a', label: '已完成', status: 'completed' }),
+      job({ id: 'b', label: '已失败', status: 'failed', detail: 'exit 1' }),
+      job({ id: 'c', label: '已取消', status: 'killed' }),
+      job({ id: 'd', label: '运行中', status: 'running', startedAt: Date.now() - 1_000, finishedAt: undefined }),
+    ]);
+    const sum = ['running', 'completed', 'failed', 'killed', 'ended']
+      .map((name) => Number(figure(view.container, 'metric', name)))
+      .reduce((left, right) => left + right, 0);
+    expect(String(sum)).toBe(figure(view.container, 'metric', 'total'));
   });
 
   test('keeps each session’s history separate', () => {
@@ -447,9 +499,25 @@ describe('accumulated ledger', () => {
   });
 
   test('an unreadable ledger starts empty instead of failing the tab', () => {
-    window.localStorage.setItem('dsh-job-stats/v1/session-tab', '{ not json');
+    window.localStorage.setItem('dsh-job-stats/v2/session-tab', '{ not json');
     const { view } = mountLive({ rows: { 'session-tab': [job({ id: 'fresh', label: '照常显示' })] } });
     expect(figure(view.container, 'metric', 'total')).toBe('1');
     expect(view.container.textContent).toContain('照常显示');
+  });
+
+  test('drops a hydrated record that claims to still be running', () => {
+    // A record hydrated as running has no stream behind it any more; the roster
+    // re-supplies it while the job is alive, and the panel must not invent a row
+    // that counts up forever.
+    window.localStorage.setItem('dsh-job-stats/v2/session-stale', JSON.stringify([
+      { id: 'stale', kind: 'pwsh', label: '上次遗留的运行中', status: 'running', startedAt: BASE, bytes: 0, seenAt: BASE },
+      { id: 'kept', kind: 'pwsh', label: '上次的已完成', status: 'completed', startedAt: BASE, finishedAt: BASE + 1_000, bytes: 0, seenAt: BASE },
+    ]));
+    const { view } = mountLive({ rows: {}, sessionKey: 'session-stale' });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(figure(view.container, 'metric', 'running')).toBe('0');
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+    expect(view.container.textContent).toContain('上次的已完成');
+    expect(view.container.textContent).not.toContain('上次遗留的运行中');
   });
 });
