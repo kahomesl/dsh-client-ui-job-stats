@@ -1,0 +1,5 @@
+# Keep the shipped JavaScript byte-identical for every checkout: the Host derives
+# a client bundle's revision from file metadata, and reviewers should see the same
+# line endings the browser receives.
+* text=auto eol=lf
+*.png binary

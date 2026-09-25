@@ -1,0 +1,7 @@
+# dsh bundle patch: inserts this plugin's Loader row into the profile roster.
+# The row name resolves through the profile's dependency on this package; the
+# browser half declared by package.json's `dsh.client` registers the sidebar
+# entry and its page, while the node half (lib/index.js) is a load-bearing no-op.
+- insert:
+    - id: job-stats
+      name: 'dsh-client-ui-job-stats'

@@ -1,0 +1,12 @@
+# pnpm settings for this repository.
+#
+# esbuild (vitest's transform) needs its install script to place the platform
+# binary; without the allowance pnpm skips it and the suite cannot run.
+# The DSH client package is pinned to a release candidate, which the default
+# fresh-release hold would otherwise refuse.
+packages:
+  - .
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-client-ui-slots@0.1.7-rc.2'

@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Test and coverage output
+coverage/
+.vitest/
+*.log
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local Harness profile artifacts, if this checkout is also used as a profile
+pnpm-lock.yaml.bak
