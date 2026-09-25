@@ -98,11 +98,16 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 
 | | |
 |---|---|
-| Path | `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json`, beside the profile's own files (with no `DSH_HOME`/`DSH_PROFILE` in the environment the ledger stays in memory rather than writing somewhere unexpected) |
+| Path | Resolved from the facts the Host actually has, most specific first: `DSH_PROFILE_DIR` → `DSH_HOME`/`DSH_PROFILE` → **the profile directory the launcher passes on argv** (`dsh-desktop-host` always passes it, as `<home>/profiles/<name>`) → the harness home (`$DSH_HOME`, or `~/.dsh`, the framework's own default). The Desktop host exports neither variable, so the argv rule is the one it uses; the rule that applied is reported as `recorder.pathSource` |
 | Records | up to **200 per session**, oldest settlements dropped first; up to 32 sessions, the least recently settled dropped first |
 | Size | 200 records of realistic command lines ≈ **53 KB**; the worst case (every label at the 2000-character cap) ≈ 420 KB |
-| Writes | after each settlement, at most once a second, plus one flush when the row unloads; temp file then rename, so a crash cannot leave it half written |
+| Writes | immediately when the one-second window has elapsed; settlements inside the window are merged into **one trailing write** at its end, so the last batch always reaches the file even if the process dies. The write serializes the live ledger (a late timer cannot publish stale records), `dirty` is cleared only by a write that landed, and a failed write is retried behind a bounded backoff. Unloading flushes at once and cancels the timer; temp file then rename, so a crash cannot leave it half written |
+| Reading it back | Only a file carrying this ledger's `schema` is read; a temporary file left by a kill between write and rename is promoted when the ledger itself is missing |
 | Deleting it | Always safe: it is a record of settled jobs, and the next settlements rebuild it. |
+
+### When something breaks
+
+The Host route answers with an `outcomes` list and a `recorder` block: the ledger path and the rule that chose it, what the load did (read / ignored another schema / recovered from a temporary file), the persistence state (`dirty`, `pending`, `writes`, `failures`, `lastError`) and the subscription's health (`state`, `attempts`, `lastError`). The panel's side matches: outcomes polling keeps `lastOkAt`/`lastErrorAt`/`consecutiveFailures`/`lastStatusCode`/`lastError`, warns on the first failure and then **only when the count doubles**, and announces a recovery with its failure count; a roster stream that will not open is retried behind a bounded backoff and stops on unmount; the browser ledger writes its last batch after the window and flushes on `pagehide` or disposal. A gap can therefore be attributed to one link instead of failing silently again.
 
 ### Task summaries
 

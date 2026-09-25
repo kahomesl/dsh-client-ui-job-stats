@@ -17,4 +17,14 @@ if (typeof document !== 'undefined') {
   beforeEach(() => {
     window.localStorage.clear();
   });
+  // Every mount polls the Host's outcomes route. jsdom's `fetch` cannot resolve the
+  // document-relative URL a page would use, so an unstubbed mount would report a
+  // transport failure that a real deployment does not have; the default answers the
+  // route the way a composed recorder does. Specs that care about failures stub
+  // their own `fetch`.
+  globalThis.fetch = () => Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ schema: 'dsh-job-stats/outcomes/v1', outcomes: [] }),
+  });
 }

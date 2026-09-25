@@ -8,29 +8,34 @@
  * the ledger file it keeps.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Context } from '@deepseek-ai/cordis';
-import { apply, inject, name } from '../lib/recorder.js';
+import { apply, inject, ledgerPathFor, name, resolveHome } from '../lib/recorder.js';
 
 /**
- * The ledger resolves its file from `DSH_HOME`/`DSH_PROFILE`, so every spec runs
+ * The ledger resolves its file from the host's own facts, so every spec runs
  * against a throwaway home: a spec that forgot this would write into the real
- * profile's ledger — and read another spec's records back.
+ * profile's ledger — and read another spec's records back. `DSH_PROFILE_DIR`
+ * outranks the other facts, so a harness that exports it (the DSH agent shell
+ * does) is neutralised here too.
  */
 let home;
 let ledgerPath;
 let previousHome;
 let previousProfile;
+let previousProfileDirectory;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'dsh-job-stats-spec-'));
   ledgerPath = join(home, 'profiles', 'spec', '.job-stats', 'ledger.json');
   previousHome = process.env.DSH_HOME;
   previousProfile = process.env.DSH_PROFILE;
+  previousProfileDirectory = process.env.DSH_PROFILE_DIR;
   process.env.DSH_HOME = home;
   process.env.DSH_PROFILE = 'spec';
+  delete process.env.DSH_PROFILE_DIR;
 });
 
 afterEach(() => {
@@ -38,6 +43,8 @@ afterEach(() => {
   else process.env.DSH_HOME = previousHome;
   if (previousProfile === undefined) delete process.env.DSH_PROFILE;
   else process.env.DSH_PROFILE = previousProfile;
+  if (previousProfileDirectory === undefined) delete process.env.DSH_PROFILE_DIR;
+  else process.env.DSH_PROFILE_DIR = previousProfileDirectory;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -67,7 +74,7 @@ function settledJob(overrides = {}) {
 }
 
 /** A Host context stub carrying the registry seam and a capture of the route. */
-function createHost({ withWebServer = true } = {}) {
+function createHost({ withWebServer = true, failSubscribes = 0 } = {}) {
   const listeners = new Set();
   const routes = [];
   const effects = [];
@@ -85,6 +92,8 @@ function createHost({ withWebServer = true } = {}) {
       events: {
         subscribe(filter, listener) {
           subscriptions.push(filter);
+          // A hub that is not ready yet: the recorder is expected to retry.
+          if (attempts++ < failSubscribes) throw new Error('the event hub is not ready');
           listeners.add(listener);
           return () => listeners.delete(listener);
         },
@@ -100,7 +109,14 @@ function createHost({ withWebServer = true } = {}) {
       },
     },
   };
+  let attempts = 0;
   const subscriptions = [];
+  /** Everything the recorder logged, so the low-noise rules are testable. */
+  const logs = { warn: [], info: [] };
+  ctx.logger = {
+    warn: (message) => logs.warn.push(String(message)),
+    info: (message) => logs.info.push(String(message)),
+  };
   const emit = (event) => {
     for (const listener of [...listeners]) listener(event);
   };
@@ -127,7 +143,7 @@ function createHost({ withWebServer = true } = {}) {
     route.handler({ method, url }, response);
     return { ...response, json: () => JSON.parse(response.body) };
   };
-  return { ctx, emit, get, routes, subscriptions, effects };
+  return { ctx, emit, get, routes, subscriptions, effects, logs };
 }
 
 describe('the recorder row', () => {
@@ -323,14 +339,47 @@ describe('the ledger file', () => {
     expect(fileRecords().map((record) => record.id)).toEqual(['after-corruption']);
   });
 
-  test('stays in memory when no host home is known', () => {
-    delete process.env.DSH_HOME;
-    delete process.env.DSH_PROFILE;
-    const host = createHost();
-    expect(() => apply(host.ctx)).not.toThrow();
-    host.emit({ type: 'settled', job: settledJob({ id: 'memory-only' }) });
-    expect(host.get('/dsh-job-stats/outcomes').json().outcomes.map((record) => record.id)).toEqual(['memory-only']);
-    expect(existsSync(join(home, 'profiles', 'spec', '.job-stats'))).toBe(false);
+  test('reads the ledger of the profile the launcher named on argv', () => {
+    // The Desktop host exports neither DSH_HOME nor DSH_PROFILE, and passes the
+    // profile directory as an argument instead: without this rule the ledger was
+    // silently memory-only, which is what made a restart lose everything between
+    // the two runs.
+    const base = join(home, 'harness');
+    const profile = join(base, 'profiles', 'desktop');
+    const resolved = ledgerPathFor({
+      env: {},
+      argv: ['node.exe', 'app.asar/dsh', profile, '--no-open'],
+      home: base,
+    });
+    expect(resolved).toEqual({ path: join(profile, '.job-stats', 'ledger.json'), source: 'launcher argument' });
+  });
+
+  test('ignores an unrelated absolute argument and keeps its own home', () => {
+    const base = join(home, 'harness');
+    const elsewhere = join(home, 'somewhere', 'desktop');
+    expect(ledgerPathFor({ env: {}, argv: ['node.exe', elsewhere], home: base })).toEqual({
+      path: join(base, '.job-stats', 'ledger.json'),
+      source: 'harness home',
+    });
+  });
+
+  test('falls back to ~/.dsh exactly as the framework does', () => {
+    expect(resolveHome({})).toBe(join(homedir(), '.dsh'));
+    expect(resolveHome({ DSH_HOME: 'C:\\explicit' })).toBe('C:\\explicit');
+    const home = join(tmpdir(), 'dsh-job-stats-home');
+    expect(ledgerPathFor({ env: {}, argv: [], home })).toEqual({
+      path: join(home, '.job-stats', 'ledger.json'),
+      source: 'harness home',
+    });
+  });
+
+  test('prefers an exported profile directory, then a named profile', () => {
+    const base = join(home, 'harness');
+    expect(ledgerPathFor({ env: { DSH_PROFILE_DIR: join(base, 'profiles', 'desk') }, argv: [], home: base }).source).toBe('DSH_PROFILE_DIR');
+    expect(ledgerPathFor({ env: { DSH_PROFILE: 'desk' }, argv: [], home: base })).toEqual({
+      path: join(base, 'profiles', 'desk', '.job-stats', 'ledger.json'),
+      source: 'DSH_PROFILE',
+    });
   });
 });
 
@@ -389,5 +438,220 @@ describe('the recorder as a real cordis plugin', () => {
 
     await fiber.dispose();
     expect(routes).toHaveLength(0);
+  });
+});
+
+describe('durable persistence', () => {
+  /** The recorder's own health block, as the panel's route serves it. */
+  const health = (host) => host.get('/dsh-job-stats/outcomes').json().recorder;
+
+  test('trailing flush persists settlements skipped by the write throttle', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      apply(host.ctx);
+      host.emit({ type: 'settled', job: settledJob({ id: 'A' }) });
+      vi.advanceTimersByTime(100);
+      host.emit({ type: 'settled', job: settledJob({ id: 'B' }) });
+      vi.advanceTimersByTime(100);
+      host.emit({ type: 'settled', job: settledJob({ id: 'C' }) });
+      // Inside the window the file holds only what the immediate write published:
+      // that is the throttle doing its job.
+      expect(fileRecords().map((record) => record.id)).toEqual(['A']);
+      // The window ends and the merged batch lands: nothing is left behind.
+      vi.advanceTimersByTime(1_000);
+      expect(fileRecords().map((record) => record.id)).toEqual(['A', 'B', 'C']);
+      expect(health(host).persistence.dirty).toBe(false);
+      expect(health(host).persistence.pending).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('dispose flushes a pending trailing write immediately', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      apply(host.ctx);
+      host.emit({ type: 'settled', job: settledJob({ id: 'A' }) });
+      vi.advanceTimersByTime(100);
+      host.emit({ type: 'settled', job: settledJob({ id: 'B' }) });
+      expect(fileRecords().map((record) => record.id)).toEqual(['A']);
+      for (const dispose of [...host.effects].reverse()) dispose();
+      expect(fileRecords().map((record) => record.id)).toEqual(['A', 'B']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a scheduled trailing write cannot overwrite a newer ledger', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      apply(host.ctx);
+      host.emit({ type: 'settled', job: settledJob({ id: 'A' }) });
+      vi.advanceTimersByTime(100);
+      host.emit({ type: 'settled', job: settledJob({ id: 'B' }) });
+      vi.advanceTimersByTime(500);
+      // Arrives while the tail is armed: the timer is neither duplicated nor reset.
+      host.emit({ type: 'settled', job: settledJob({ id: 'C' }) });
+      expect(health(host).persistence.pending).toBe(true);
+      vi.advanceTimersByTime(500);
+      // The tail serialized the live ledger, so C is on disk rather than the B snapshot.
+      expect(fileRecords().map((record) => record.id)).toEqual(['A', 'B', 'C']);
+      expect(health(host).persistence.writes).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('save failure leaves the ledger dirty for retry', () => {
+    vi.useFakeTimers();
+    try {
+      // A file where the ledger's directory belongs makes every write fail.
+      writeFileSync(join(home, 'profiles'), 'not a directory');
+      const host = createHost();
+      apply(host.ctx);
+      host.emit({ type: 'settled', job: settledJob({ id: 'A' }) });
+      expect(health(host).persistence.failures).toBe(1);
+      expect(health(host).persistence.dirty).toBe(true);
+      expect(health(host).persistence.lastError).toBeTruthy();
+      expect(host.logs.warn.join('\n')).toContain('cannot write the ledger');
+
+      // The obstruction goes away: the batch is still in memory and lands on retry.
+      rmSync(join(home, 'profiles'), { force: true });
+      vi.advanceTimersByTime(30_000);
+      expect(fileRecords().map((record) => record.id)).toEqual(['A']);
+      expect(health(host).persistence.dirty).toBe(false);
+      expect(health(host).persistence.failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('rapid settlements survive a simulated ungraceful restart after trailing flush', () => {
+    vi.useFakeTimers();
+    try {
+      const first = createHost();
+      apply(first.ctx);
+      for (const id of ['A', 'B', 'C']) {
+        first.emit({ type: 'settled', job: settledJob({ id }) });
+        vi.advanceTimersByTime(100);
+      }
+      // The process dies here: no disposer runs.
+      vi.advanceTimersByTime(1_000);
+      const second = createHost();
+      apply(second.ctx);
+      expect(second.get('/dsh-job-stats/outcomes?sessionId=session-a').json().outcomes.map((record) => record.id)).toEqual(['A', 'B', 'C']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('without the trailing flush the same burst would have lost its tail', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      apply(host.ctx);
+      // Sanity check on the shape of the bug this replaced: the file is behind the
+      // in-memory ledger for exactly as long as the window lasts, so a kill inside
+      // it loses everything after the first write. The assertion is the reason the
+      // trailing write exists.
+      host.emit({ type: 'settled', job: settledJob({ id: 'A' }) });
+      vi.advanceTimersByTime(100);
+      host.emit({ type: 'settled', job: settledJob({ id: 'B' }) });
+      expect(fileRecords().map((record) => record.id)).toEqual(['A']);
+      expect(host.get('/dsh-job-stats/outcomes').json().outcomes.map((record) => record.id)).toEqual(['A', 'B']);
+      expect(health(host).persistence.dirty).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the ledger file format', () => {
+  test('ignores a file carrying a schema it does not own', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify({ schema: 'some-other-plugin/ledger/v9', records: [settledJob({ id: 'foreign' })] }));
+    const host = createHost();
+    apply(host.ctx);
+    expect(host.get('/dsh-job-stats/outcomes').json().outcomes).toEqual([]);
+    expect(host.get('/dsh-job-stats/outcomes').json().recorder.ledgerNote).toContain('ignored');
+    expect(host.logs.info.join('\n')).toContain('ignored a file carrying schema');
+  });
+
+  test('recovers the batch a kill left in the temporary file', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(`${ledgerPath}.tmp`, JSON.stringify({ schema: 'dsh-job-stats/ledger/v1', records: [settledJob({ id: 'recovered' })] }));
+    const host = createHost();
+    apply(host.ctx);
+    expect(host.get('/dsh-job-stats/outcomes').json().outcomes.map((record) => record.id)).toEqual(['recovered']);
+    expect(existsSync(ledgerPath)).toBe(true);
+    expect(existsSync(`${ledgerPath}.tmp`)).toBe(false);
+  });
+
+  test('reports where the ledger lives and how it is doing', () => {
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'reported' }) });
+    const block = host.get('/dsh-job-stats/outcomes').json().recorder;
+    expect(block.durable).toBe(true);
+    expect(block.path).toBe(ledgerPath);
+    expect(block.pathSource).toBe('DSH_PROFILE');
+    expect(block.records).toBe(1);
+    expect(block.loadedFromFile).toBe(0);
+    expect(block.persistence.writes).toBe(1);
+    expect(block.persistence.dirty).toBe(false);
+    expect(block.subscription).toEqual({ state: 'subscribed', attempts: 1, since: expect.any(Number), lastError: null });
+    expect(typeof block.boot).toBe('string');
+    // The records themselves are unchanged: the extra block is additive.
+    expect(host.get('/dsh-job-stats/outcomes').json().schema).toBe('dsh-job-stats/outcomes/v1');
+  });
+});
+
+describe('the event subscription', () => {
+  test('retries until the hub accepts it, then records again', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost({ failSubscribes: 2 });
+      apply(host.ctx);
+      expect(host.get('/dsh-job-stats/outcomes').json().recorder.subscription.state).toBe('retrying');
+      expect(host.logs.warn.join('\n')).toContain('cannot subscribe to job events');
+
+      // First retry after 1s, second after 2s: the third attempt succeeds.
+      vi.advanceTimersByTime(1_000);
+      expect(host.subscriptions).toHaveLength(2);
+      vi.advanceTimersByTime(2_000);
+      expect(host.subscriptions).toHaveLength(3);
+      const block = host.get('/dsh-job-stats/outcomes').json().recorder;
+      expect(block.subscription.state).toBe('subscribed');
+      expect(block.subscription.attempts).toBe(3);
+
+      // The recovered subscription is live: a settlement is recorded and written.
+      host.emit({ type: 'settled', job: settledJob({ id: 'after-retry' }) });
+      expect(host.get('/dsh-job-stats/outcomes').json().outcomes.map((record) => record.id)).toEqual(['after-retry']);
+      expect(host.logs.info.join('\n')).toContain('subscription recovered');
+
+      // Unloading cancels a pending retry instead of leaving a timer behind.
+      for (const dispose of [...host.effects].reverse()) dispose();
+      vi.advanceTimersByTime(60_000);
+      expect(host.subscriptions).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps one warning per doubling while the hub stays unreachable', () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost({ failSubscribes: 100 });
+      apply(host.ctx);
+      vi.advanceTimersByTime(1_000 + 2_000 + 4_000 + 8_000);
+      // Attempts 1..5 happened; only 1, 2 and 4 are announced.
+      expect(host.subscriptions).toHaveLength(5);
+      expect(host.logs.warn).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

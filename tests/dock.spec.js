@@ -662,6 +662,211 @@ describe('accumulated ledger', () => {
   });
 });
 
+describe('recovery and durability', () => {
+  /** One outcome record as the recorder row serves it. */
+  function outcome(overrides = {}) {
+    return {
+      id: 'collected',
+      sessionId: 'session-poll',
+      kind: 'pwsh',
+      label: 'pnpm install',
+      status: 'completed',
+      detail: 'exit code: 0',
+      startedAt: BASE,
+      finishedAt: BASE + 12_000,
+      bytes: 2_048,
+      ...overrides,
+    };
+  }
+
+  /** A fetch stub that rejects a given number of times before answering. */
+  function stubFlakyRoute(outcomes, failures) {
+    let attempt = 0;
+    vi.stubGlobal('fetch', () => {
+      attempt += 1;
+      if (attempt <= failures) return Promise.reject(new Error(`connection lost (${String(attempt)})`));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ schema: 'dsh-job-stats/outcomes/v1', outcomes }),
+      });
+    });
+    return () => attempt;
+  }
+
+  /** Mount the plugin on a session and render the dock body. */
+  async function mountPanel(options) {
+    const harness = createContext(options);
+    const { face } = materialize();
+    harness.declareFrame();
+    face.apply(harness.ctx);
+    const { Component, props } = dockProps(harness, options.sessionKey ?? 'session-tab');
+    let view;
+    await act(async () => {
+      view = render(React.createElement(Component, props));
+    });
+    return { harness, Component, props, view };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  test('outcomes polling recovers after temporary fetch failures', async () => {
+    vi.useFakeTimers();
+    const warnings = [];
+    const notices = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warnings.push(args.join(' '));
+    });
+    vi.spyOn(console, 'info').mockImplementation((...args) => {
+      notices.push(args.join(' '));
+    });
+    const attempts = stubFlakyRoute([outcome()], 2);
+    const { view } = await mountPanel({ rows: {}, sessionKey: 'session-poll' });
+    // The first sync failed: the panel shows its empty state and the console says
+    // which link broke, instead of the failure disappearing into an `undefined`.
+    expect(attempts()).toBe(1);
+    expect(warnings.join('\n')).toContain('outcomes polling failed 1 time');
+    expect(view.container.textContent).toContain('本会话还没有后台任务');
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_100);
+    });
+    expect(attempts()).toBe(2);
+    expect(warnings.join('\n')).toContain('outcomes polling failed 2 time');
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_100);
+    });
+    expect(attempts()).toBe(3);
+    expect(notices.join('\n')).toContain('outcomes polling recovered after 2 failure(s)');
+    // The record the Host had all along is now on the panel.
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+  });
+
+  test('keeps the failure log quiet while an outage lasts', async () => {
+    vi.useFakeTimers();
+    const warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warnings.push(args.join(' '));
+    });
+    stubFlakyRoute([], 100);
+    await mountPanel({ rows: {}, sessionKey: 'session-quiet' });
+    await act(async () => {
+      vi.advanceTimersByTime(8_100);
+    });
+    // Five attempts, three announcements: 1, 2 and 4.
+    expect(warnings.filter((line) => line.includes('outcomes polling failed'))).toHaveLength(3);
+  });
+
+  test('a status answer and a broken body are told apart', async () => {
+    const warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warnings.push(args.join(' '));
+    });
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 404 }));
+    await mountPanel({ rows: {}, sessionKey: 'session-404' });
+    expect(warnings.join('\n')).toContain('HTTP 404');
+
+    warnings.length = 0;
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('not json')) }));
+    await mountPanel({ rows: {}, sessionKey: 'session-broken' });
+    expect(warnings.join('\n')).toContain('the answer was not JSON');
+  });
+
+  test('the roster watch recovers after a temporary open failure', async () => {
+    vi.useFakeTimers();
+    const warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warnings.push(args.join(' '));
+    });
+    // The stream refuses before the panel asks for it, and recovers on the third
+    // attempt; the face resolves `watchRows` per call, exactly as the dock's own
+    // injection does.
+    const harness = createContext({ rows: {}, sessionKey: 'session-watch' });
+    const { face } = materialize();
+    harness.declareFrame();
+    face.apply(harness.ctx);
+    const original = harness.ctx.jobs.watchRows.bind(harness.ctx.jobs);
+    let failures = 0;
+    harness.ctx.jobs.watchRows = (id) => {
+      if (failures < 2) {
+        failures += 1;
+        throw new Error('sidebar is not ready');
+      }
+      return original(id);
+    };
+    const { Component, props } = dockProps(harness, 'session-watch');
+    let view;
+    await act(async () => {
+      view = render(React.createElement(Component, props));
+    });
+    expect(harness.watch.opened).toEqual([]);
+    expect(warnings.join('\n')).toContain('unable to watch the job roster (attempt 1)');
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(harness.watch.opened).toEqual([]);
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(harness.watch.opened).toEqual(['session-watch']);
+
+    // Unmounting stops the schedule and closes the stream once.
+    view.unmount();
+    expect(harness.watch.disposals).toBe(1);
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(harness.watch.opened).toHaveLength(1);
+  });
+
+  test('the accumulated ledger publishes its last batch after the window', async () => {
+    vi.useFakeTimers();
+    const key = 'dsh-job-stats/v2/session-ledger';
+    const { harness } = await mountPanel({
+      rows: { 'session-ledger': [job({ id: 'first', label: '第一条' })] },
+      sessionKey: 'session-ledger',
+    });
+    // The first write lands immediately: nothing was written before it.
+    expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first']);
+
+    // A frame inside the window is merged, not written yet…
+    await act(async () => {
+      harness.roster.set('session-ledger', [job({ id: 'first', label: '第一条' }), job({ id: 'second', label: '第二条' })]);
+    });
+    expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first']);
+
+    // …and the trailing write publishes the whole merged batch.
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first', 'second']);
+  });
+
+  test('a page going away publishes a batch the window was still holding', async () => {
+    vi.useFakeTimers();
+    const key = 'dsh-job-stats/v2/session-pagehide';
+    const { harness } = await mountPanel({
+      rows: { 'session-pagehide': [job({ id: 'first' })] },
+      sessionKey: 'session-pagehide',
+    });
+    await act(async () => {
+      harness.roster.set('session-pagehide', [job({ id: 'first' }), job({ id: 'second' })]);
+    });
+    expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first']);
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first', 'second']);
+  });
+});
+
 describe('host-recorded outcomes', () => {
   /** One outcome record as the recorder row serves it. */
   function outcome(overrides = {}) {

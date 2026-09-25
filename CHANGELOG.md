@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] — 2026-09-26
+
+### Fixed
+
+- **The ledger now finds its own file, and a burst of settlements always reaches it.**
+  - The path was resolved from `DSH_HOME`/`DSH_PROFILE` alone, and the Desktop host process exports **neither**: `storePath()` returned `undefined`, so 1.4.0's "durable" ledger was silently memory-only in the very deployment it was written for. Every restart began empty and the panel's own browser storage was the only history left — which is how a stretch of records can vanish while the Host still knows about them. The path is now resolved from the facts the host actually has, most specific first: `DSH_PROFILE_DIR`, then `DSH_HOME`/`DSH_PROFILE`, then **the profile directory the launcher passes on argv** (`dsh-desktop-host` always passes it), then the harness home (`$DSH_HOME`, or `~/.dsh` — the framework's own default). The rule that applied is reported as `recorder.pathSource`.
+  - Writes were a dropping throttle with no trailing flush: settlements inside the one-second window stayed in memory until a disposer ran, so a crash, a kill or an abnormal shutdown lost them for good — "records fine, then a gap, then fine again". The recorder now keeps `dirty`, `lastWrittenAt` and one timer, merges a burst into one immediate write plus one trailing write at the end of the window, serializes the live ledger (a late timer cannot publish stale records), clears `dirty` only after a write that landed, and retries a failed write behind a bounded backoff. Unloading flushes at once and cancels the timer.
+  - The file is read only when its `schema` marker matches, and a temporary file left by a kill between write and rename is promoted when the ledger itself is missing.
+
+- **A failure on any link is visible instead of silent.**
+  - The event subscription is retried behind an exponential backoff instead of leaving the row roster-only forever after one failed `subscribe`, and its state (`subscribed`/`retrying`, attempts, last error) is reported.
+  - The route carries a `recorder` block — path and the rule that chose it, load note, persistence state (`dirty`, `pending`, `writes`, `failures`, `lastError`), subscription health — so a panel that sees an empty ledger can tell "nothing settled" from "this row is broken".
+  - The browser half matches it: outcomes polling records `lastOkAt`/`lastErrorAt`/`consecutiveFailures`/`lastStatusCode`/`lastError`, warns on the first failure and then only on every doubling, and announces a recovery with its failure count; a roster stream that will not open is retried behind a bounded backoff and stops on unmount; the browser ledger publishes its last batch after the window and flushes on `pagehide` or disposal. Polling failures also distinguish a missing route (HTTP status) from an unreadable body and a lost connection.
+
+### Tests
+
+- Ten new specs (84 in total): a trailing flush for a burst the window swallowed, an immediate flush on dispose, a late timer that cannot overwrite newer records, a failed write that stays dirty and lands on retry, a burst that survives a simulated ungraceful restart, all four path-resolution rules including the Desktop argv shape, schema rejection, temporary-file recovery, the health block, subscription retry with one warning per doubling, polling recovery with its quiet-outage rule, roster-watch recovery, and the ledger flush on `pagehide`.
+- Recorder specs neutralise `DSH_PROFILE_DIR` in addition to pinning `DSH_HOME`/`DSH_PROFILE`, so a harness that exports it cannot write into a real profile's ledger.
+
+### Notes
+
+- This replaces 1.4.0's note that "without `DSH_HOME`/`DSH_PROFILE` nothing is written at all": the ledger is written in every deployment now. A deployment that names no profile at all shares one ledger across the harness home, which the route reports as `pathSource: harness home`.
+
 ## [1.4.2] — 2026-09-25
 
 ### Docs

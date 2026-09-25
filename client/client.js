@@ -725,6 +725,10 @@ window.__ModuleLoader__.load({
      * alive), and the Host's own removal semantics are projected as `ended`.
      */
     const LEDGER_KEY = 'dsh-job-stats/v2/';
+    /** Shortest gap between two browser-storage writes while records keep arriving. */
+    const LEDGER_INTERVAL_MS = 1000;
+    /** Longest delay before retrying a browser-storage write that was rejected. */
+    const LEDGER_RETRY_MAX_MS = 30_000;
     /** Per-session accumulated ledgers, one plugin module instance wide. */
     const ledgers = new Map();
 
@@ -742,7 +746,15 @@ window.__ModuleLoader__.load({
     function ledgerFor(sessionId) {
       const existing = ledgers.get(sessionId);
       if (existing !== undefined) return existing;
-      const entry = { records: new Map(), writtenAt: 0 };
+      const entry = {
+        records: new Map(),
+        writtenAt: 0,
+        dirty: false,
+        pending: null,
+        retryMs: LEDGER_INTERVAL_MS,
+        failures: 0,
+        lastError: null,
+      };
       ledgers.set(sessionId, entry);
       try {
         const raw = window.localStorage?.getItem(LEDGER_KEY + sessionId);
@@ -805,15 +817,83 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** Write one ledger back to browser storage, at most once a second unless `force`. */
-    function persistLedger(sessionId, entry, force) {
-      const stamp = Date.now();
-      if (!force && stamp - entry.writtenAt < 1000) return;
-      entry.writtenAt = stamp;
+    /** Cancel one ledger's pending trailing write. */
+    function clearPendingWrite(entry) {
+      if (entry.pending === null) return;
+      clearTimeout(entry.pending);
+      entry.pending = null;
+    }
+
+    /**
+     * Write one session's live ledger to browser storage.
+     * @param sessionId - the session the ledger belongs to.
+     * @param entry - the ledger entry.
+     * @returns whether the write landed.
+     */
+    function writeLedger(sessionId, entry) {
       try {
         window.localStorage?.setItem(LEDGER_KEY + sessionId, JSON.stringify([...entry.records.values()]));
-      } catch {
-        /* a full or unavailable store keeps the in-memory ledger only */
+        entry.writtenAt = Date.now();
+        entry.dirty = false;
+        entry.failures = 0;
+        entry.retryMs = LEDGER_INTERVAL_MS;
+        entry.lastError = null;
+        return true;
+      } catch (error) {
+        // A full or unavailable store keeps the in-memory ledger and stays dirty:
+        // the next attempt writes the whole batch again.
+        entry.dirty = true;
+        entry.failures += 1;
+        entry.lastError = error instanceof Error ? error.message : String(error);
+        entry.retryMs = Math.min(entry.retryMs * 2, LEDGER_RETRY_MAX_MS);
+        if (entry.failures === 1 || (entry.failures & (entry.failures - 1)) === 0) {
+          console.warn(`[job-stats] cannot write the accumulated ledger for ${sessionId}: ${entry.lastError}`);
+        }
+        return false;
+      }
+    }
+
+    /** Arm the single trailing write that publishes whatever the window swallowed. */
+    function armLedgerWrite(sessionId, entry, delay) {
+      if (entry.pending !== null || !entry.dirty) return;
+      entry.pending = setTimeout(() => {
+        entry.pending = null;
+        if (!entry.dirty) return;
+        writeLedger(sessionId, entry);
+        if (entry.dirty) armLedgerWrite(sessionId, entry, entry.retryMs);
+      }, Math.max(0, delay));
+    }
+
+    /**
+     * Persist one session's ledger.
+     *
+     * `writtenAt` is the last *successful* write, so a burst of record updates is
+     * merged into one immediate write plus one trailing write at the end of the
+     * window: the last batch always reaches storage, and a page closed inside the
+     * window does not lose it. The timer is never duplicated or re-armed earlier,
+     * the write always serializes the live ledger, so a late timer cannot publish
+     * a stale one, and a rejected write stays dirty for the next attempt.
+     * @param sessionId - the session the ledger belongs to.
+     * @param entry - the ledger entry.
+     * @param force - write now whatever the window says (lifecycle flushes only).
+     */
+    function persistLedger(sessionId, entry, force) {
+      entry.dirty = true;
+      const elapsed = Date.now() - entry.writtenAt;
+      if (force || elapsed >= LEDGER_INTERVAL_MS) {
+        clearPendingWrite(entry);
+        writeLedger(sessionId, entry);
+        if (entry.dirty) armLedgerWrite(sessionId, entry, entry.retryMs);
+        return;
+      }
+      armLedgerWrite(sessionId, entry, LEDGER_INTERVAL_MS - elapsed);
+    }
+
+    /** Publish every dirty ledger at once, as the page is going away. */
+    function flushLedgers() {
+      for (const [sessionId, entry] of ledgers) {
+        clearPendingWrite(entry);
+        if (entry.dirty) writeLedger(sessionId, entry);
       }
     }
 
@@ -828,7 +908,6 @@ window.__ModuleLoader__.load({
       const entry = ledgerFor(sessionId);
       const seenAt = Date.now();
       let changed = false;
-      let settledNow = false;
       for (const job of rows) {
         const record = ledgerRecord(job, seenAt);
         if (record.id === '') continue;
@@ -841,13 +920,14 @@ window.__ModuleLoader__.load({
         // Never downgrade a record whose outcome the Host already reported: a roster
         // frame produced before the settlement can arrive after it (two channels).
         if (previous !== undefined && !isLive(previous) && isLive(record)) continue;
-        if (previous !== undefined && isLive(previous) && !isLive(record)) settledNow = true;
         entry.records.set(record.id, record);
         changed = true;
       }
       if (changed) {
         pruneLedger(entry);
-        persistLedger(sessionId, entry, settledNow);
+        // Merged, not forced: a burst of frames inside the window costs one write
+        // now and one trailing write at its end, and the tail is never lost.
+        persistLedger(sessionId, entry, false);
       }
       return changed;
     }
@@ -905,6 +985,10 @@ window.__ModuleLoader__.load({
     const OUTCOMES_PATH = 'dsh-job-stats/outcomes';
     /** How often the panel asks for recorded outcomes while it is open. */
     const OUTCOMES_POLL_MS = 2000;
+    /** Delay before retrying a roster stream that would not open. */
+    const ROSTER_RETRY_MS = 500;
+    /** Longest delay before retrying a roster stream that would not open. */
+    const ROSTER_RETRY_MAX_MS = 30_000;
 
     /**
      * Resolve the outcomes route against the page the UI is served from.
@@ -926,21 +1010,81 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * How the outcomes poll is doing.
+     *
+     * A gap in the panel has several possible causes — the Host recorded nothing, the
+     * recorder row is not composed, the request failed, the body was not JSON, the
+     * page lost its connection — and they are indistinguishable when every failure
+     * returns `undefined` silently. These counters keep them apart, the console gets
+     * the first failure and then only every doubling so a long outage stays quiet,
+     * and a recovery is announced once.
+     */
+    const outcomesHealth = {
+      lastOkAt: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+      lastStatusCode: null,
+      lastError: null,
+    };
+
+    /** Record one unreadable poll, with or without a response. */
+    function noteOutcomesFailure(status, message) {
+      outcomesHealth.consecutiveFailures += 1;
+      outcomesHealth.lastErrorAt = Date.now();
+      outcomesHealth.lastStatusCode = status;
+      outcomesHealth.lastError = message;
+      const failures = outcomesHealth.consecutiveFailures;
+      // Low noise: the first failure, then only on every doubling.
+      if (failures === 1 || (failures & (failures - 1)) === 0) {
+        console.warn(`[job-stats] outcomes polling failed ${String(failures)} time(s): ${message}`);
+      }
+    }
+
+    /**
      * Read the Host's recorded outcomes.
      * @param sessionId - the session whose outcomes are wanted.
-     * @returns the outcome records, or undefined when the recorder is not composed.
+     * @returns the outcome records, or undefined when they could not be read.
      */
     async function fetchOutcomes(sessionId) {
-      if (typeof fetch !== 'function') return undefined;
-      try {
-        const response = await fetch(outcomesUrl(sessionId), { headers: { accept: 'application/json' } });
-        if (response === null || typeof response !== 'object' || response.ok !== true) return undefined;
-        const body = await response.json();
-        return body !== null && typeof body === 'object' && Array.isArray(body.outcomes) ? body.outcomes : undefined;
-      } catch {
-        // A composition without the recorder row leaves the panel on its own ledger.
+      if (typeof fetch !== 'function') {
+        noteOutcomesFailure(null, 'this page has no fetch');
         return undefined;
       }
+      let response;
+      try {
+        response = await fetch(outcomesUrl(sessionId), { headers: { accept: 'application/json' } });
+      } catch (error) {
+        noteOutcomesFailure(null, error instanceof Error ? error.message : String(error));
+        return undefined;
+      }
+      if (response === null || typeof response !== 'object') {
+        noteOutcomesFailure(null, 'the request produced no response');
+        return undefined;
+      }
+      const status = typeof response.status === 'number' ? response.status : null;
+      if (response.ok !== true) {
+        noteOutcomesFailure(status, `the recorder route answered ${status === null ? 'nothing' : `HTTP ${String(status)}`}`);
+        return undefined;
+      }
+      let body;
+      try {
+        body = await response.json();
+      } catch (error) {
+        noteOutcomesFailure(status, `the answer was not JSON: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+      const outcomes = body !== null && typeof body === 'object' && Array.isArray(body.outcomes) ? body.outcomes : undefined;
+      if (outcomes === undefined) {
+        noteOutcomesFailure(status, 'the answer carried no outcome list');
+        return undefined;
+      }
+      const failures = outcomesHealth.consecutiveFailures;
+      outcomesHealth.lastOkAt = Date.now();
+      outcomesHealth.consecutiveFailures = 0;
+      outcomesHealth.lastStatusCode = status;
+      outcomesHealth.lastError = null;
+      if (failures > 0) console.info(`[job-stats] outcomes polling recovered after ${String(failures)} failure(s)`);
+      return outcomes;
     }
 
     /**
@@ -981,7 +1125,7 @@ window.__ModuleLoader__.load({
       }
       if (changed) {
         pruneLedger(entry);
-        persistLedger(sessionId, entry, true);
+        persistLedger(sessionId, entry, false);
       }
       return changed;
     }
@@ -1273,15 +1417,35 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (sessionId === undefined || typeof watchRows !== 'function') return undefined;
-        try {
-          const dispose = watchRows(sessionId);
-          return typeof dispose === 'function' ? dispose : undefined;
-        } catch (error) {
-          // A roster stream that cannot open leaves the panel on its last state
-          // instead of taking the tab down with it.
-          console.warn('[job-stats] unable to watch the job roster', error);
-          return undefined;
-        }
+        let stopped = false;
+        let attempt = 0;
+        let close;
+        let timer;
+        /** Open the roster stream, retrying behind a bounded backoff while it refuses. */
+        const open = () => {
+          if (stopped) return;
+          attempt += 1;
+          try {
+            const dispose = watchRows(sessionId);
+            close = typeof dispose === 'function' ? dispose : undefined;
+            if (attempt > 1) console.info(`[job-stats] job roster watch recovered after ${String(attempt - 1)} failed attempt(s)`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const wait = Math.min(ROSTER_RETRY_MS * 2 ** (attempt - 1), ROSTER_RETRY_MAX_MS);
+            // Low noise: the first failure, then only on every doubling.
+            if (attempt === 1 || (attempt & (attempt - 1)) === 0) {
+              console.warn(`[job-stats] unable to watch the job roster (attempt ${String(attempt)}): ${message}; retrying in ${String(wait)}ms`);
+            }
+            timer = setTimeout(open, wait);
+          }
+        };
+        open();
+        return () => {
+          // Unmounting — or another session — stops the retries for good.
+          stopped = true;
+          if (timer !== undefined) clearTimeout(timer);
+          close?.();
+        };
       }, [sessionId, watchRows]);
 
       // Outcomes the roster cannot carry: the Host records them, the panel asks for
@@ -1669,6 +1833,20 @@ window.__ModuleLoader__.load({
           }
         }, 'job-stats: dictionaries');
         ctx.effect(() => installStyles(), 'job-stats: stylesheet');
+        // A page that goes away inside the write window must still publish the batch
+        // the trailing write was holding: `pagehide` covers reload, navigation and a
+        // closing window, and the same flush runs when the plugin is disposed.
+        ctx.effect(() => {
+          if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
+          const flush = () => {
+            flushLedgers();
+          };
+          window.addEventListener('pagehide', flush);
+          return () => {
+            window.removeEventListener('pagehide', flush);
+            flushLedgers();
+          };
+        }, 'job-stats: ledger flush');
         try {
           const bound = ctx.locale.bind(NS);
           if (typeof bound === 'function') translate = bound;

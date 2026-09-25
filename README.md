@@ -94,11 +94,16 @@ git clone https://github.com/kahomesl/dsh-client-ui-job-stats.git
 
 | | |
 |---|---|
-| 路径 | `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json`（与 profile 自己的文件并列；环境里没有 `DSH_HOME`/`DSH_PROFILE` 时只留在内存，不往别处写） |
+| 路径 | 按宿主真正拥有的事实逐级判定：`DSH_PROFILE_DIR` → `DSH_HOME`/`DSH_PROFILE` → **启动器在命令行里传的 profile 目录**（`dsh-desktop-host` 一定会传，形如 `C:\Users\你\.dsh\profiles\desktop`）→ 最后退回 harness home（`$DSH_HOME`，没有则 `~/.dsh`，即框架自己的默认值）。桌面版宿主**不导出** `DSH_HOME`/`DSH_PROFILE`，所以这一条 argv 规则就是它在用的那条；用的是哪条规则会在路由的 `recorder.pathSource` 里说明 |
 | 条数 | **每会话最多 200 条**，超出先淘汰最早的结算；最多 32 个会话，超出先淘汰最久没结算的 |
 | 体积 | 200 条真实命令 ≈ **53 KB**；最坏情况（每条命令都到 2000 字符上限）≈ 420 KB |
-| 写入 | 每次结算后写一次、每秒最多一次，行卸载时再刷一次；先写临时文件再改名，崩溃不会留下半个文件 |
+| 写入 | 窗口（1 秒）外立即写；窗口内的多次结算合并成**一次尾部写**，窗口结束时一定落盘 —— 因此"最后一批"不会因为崩溃/强杀而留在内存里。写的是**当下的完整台账**（迟到的定时器不会写出旧数据），只有写入成功才清 dirty，写失败按有上限的退避重试。行卸载时立即 flush 并取消定时器；先写临时文件再改名，崩溃不会留下半个文件 |
+| 读回 | 只认自己的 `schema` 标记，别的文件一概不读；若上次是在"写临时文件"和"改名"之间被杀，会把这个临时文件提升为正式台账 |
 | 删除 | 任何时候都可以删：它只是已结算任务的记录，后续结算会重新建立 |
+
+### 出问题时怎么定位
+
+宿主路由的响应里除了 `outcomes` 还有一个 `recorder` 块：台账路径与判定来源、装载结果（正常/忽略别的 schema/从临时文件恢复）、持久化状态（`dirty`、`pending`、`writes`、`failures`、`lastError`）与订阅健康（`state`、`attempts`、`lastError`）。面板侧同理：outcomes 轮询会记录 `lastOkAt`/`lastErrorAt`/`consecutiveFailures`/`lastStatusCode`/`lastError`，**第一次失败 warn，之后只在次数翻倍时再报**，恢复时打一条 info 说明失败了几次；名册流打不开会按有上限的退避重试（卸载即停），浏览器台账在窗口结束时补写、页面 `pagehide` 或插件卸载时立即落盘。这样"中间少了一段"能直接看出是哪条链断的，而不是又一次静默失败。
 
 ### 任务概述从哪来
 

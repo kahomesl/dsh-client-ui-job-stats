@@ -45,6 +45,10 @@ export function loadRegistration() {
     // The bundle reads browser storage for its accumulated ledger, exactly as it
     // would in a page; the shim hands it the jsdom store the specs control.
     localStorage: globalThis.localStorage,
+    // Lifecycle events (`pagehide`) arrive on the page's own window, so the shim
+    // delegates them to jsdom's rather than swallowing the registration.
+    addEventListener: globalThis.addEventListener.bind(globalThis),
+    removeEventListener: globalThis.removeEventListener.bind(globalThis),
   };
   // Bundles are classic scripts: no imports, no exports, one registration.
   new Function('window', source)(window);
