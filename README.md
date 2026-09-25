@@ -8,7 +8,14 @@
 
 中文说明见 [README.zh.md](README.zh.md).
 
-![The job-statistics panel in the right Sidebar](docs/preview.png)
+![The job-statistics panel](docs/screenshot-jobs.png)
+![A task row expanded to its full command](docs/screenshot-detail.png)
+
+Both images are produced by `pnpm preview` from the plugin's own components — the
+same `client/client.js` the Host serves, mounted with the props the renderer
+composes and the app's dark-theme token values — over sample job rows, because a
+screenshot of a live session would show whatever that session ran. They are declared
+in [`screenshots.json`](screenshots.json), which is what storefronts read.
 
 ---
 

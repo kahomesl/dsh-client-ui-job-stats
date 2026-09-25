@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-09-25
+
+### Docs
+
+- The README's screenshot is replaced by two current ones — the panel, and a task row expanded to its full command — and both are declared in `screenshots.json`, the file storefronts read.
+- They are generated, not pasted: `pnpm preview` bundles a page, mounts `client/client.js` — the same file the Host serves — with the props the renderer composes and the app's dark-theme token values, renders representative job rows in a headless Chromium, and writes `docs/screenshot-*.png`. A UI change can therefore refresh the screenshots in the same commit, and the provenance of the images lives in the repository rather than in somebody's clipboard.
+
 ## [1.4.0] — 2026-09-25
 
 ### Added

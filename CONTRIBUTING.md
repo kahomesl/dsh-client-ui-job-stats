@@ -16,10 +16,15 @@ There is no build step: `client/client.js` is shipped as authored JavaScript, an
 the Host loads it as a classic script. `pnpm test` runs the vitest suite against
 the production slot registry and real React.
 
+`pnpm preview` re-renders `docs/screenshot-*.png` from those same components in a
+headless browser over sample rows, so a UI change can update the screenshots — the
+ones the README and storefronts show — in the same commit. It needs a Chromium
+(Edge, Chrome or Chromium; set `PREVIEW_BROWSER` to point at one).
+
 To try a change inside a running Harness, install the checkout into a profile
-(see the README) and edit the two source files in place — the Host re-derives a
-client bundle's revision from the file's metadata and re-reads it on its own, so
-no restart is needed.
+(see the README) and edit the two source files in place — a changed browser half
+needs no restart (the Host re-derives its revision from the file's metadata), while
+a change to the Host half is loaded at boot and therefore needs one.
 
 ## What a change must keep true
 

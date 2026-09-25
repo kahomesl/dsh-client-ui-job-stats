@@ -8,7 +8,10 @@
 
 English | [README.md](README.md)
 
-![右侧边栏里的后台任务统计面板](docs/preview.png)
+![后台任务统计面板](docs/screenshot-jobs.png)
+![点开一行后显示完整命令](docs/screenshot-detail.png)
+
+这两张图由 `pnpm preview` 用插件**自己的组件**渲染而成 —— 与宿主实际提供的 `client/client.js` 是同一个文件，按渲染器组装的 props 挂载、配色取应用真实深色主题的 token 值，只有任务行是示例数据（真实会话的截图会暴露那个会话跑过什么）。它们声明在 [`screenshots.json`](screenshots.json) 里，插件市场读的就是它。
 
 ---
 

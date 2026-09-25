@@ -15,3 +15,6 @@ Thumbs.db
 
 # Local Harness profile artifacts, if this checkout is also used as a profile
 pnpm-lock.yaml.bak
+
+# Output of pnpm preview (regenerated on demand)
+docs/preview/build/
