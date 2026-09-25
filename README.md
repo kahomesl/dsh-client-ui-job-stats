@@ -85,7 +85,17 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 1. While the tab is mounted it holds the session's roster stream open (`ctx.jobs.watchRows(sessionId)`); the stream's first frame is already the whole truth.
 2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
 3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
-4. **Outcomes come from the Host.** While the panel is open it polls the recorder row's route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. The recorder keeps the last 2000 settlements in the process, keyed by session, and a 405/404/unreachable route simply leaves the panel on its own ledger.
+4. **Outcomes come from the Host.** The recorder row subscribes to the registry's `settled` events — the one witness of a collected command's terminal state — and keeps them **durably** in `.job-stats/ledger.json` inside the profile. The panel polls the route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. Because that ledger is the Host's, a panel opened after a restart still shows what the previous run settled — browser storage is not part of this path.
+
+### The ledger file
+
+| | |
+|---|---|
+| Path | `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json`, beside the profile's own files (with no `DSH_HOME`/`DSH_PROFILE` in the environment the ledger stays in memory rather than writing somewhere unexpected) |
+| Records | up to **200 per session**, oldest settlements dropped first; up to 32 sessions, the least recently settled dropped first |
+| Size | 200 records of realistic command lines ≈ **53 KB**; the worst case (every label at the 2000-character cap) ≈ 420 KB |
+| Writes | after each settlement, at most once a second, plus one flush when the row unloads; temp file then rename, so a crash cannot leave it half written |
+| Deleting it | Always safe: it is a record of settled jobs, and the next settlements rebuild it. |
 
 ### Task summaries
 
@@ -95,10 +105,10 @@ Recognition is deliberately conservative in both directions: a command it does n
 
 ### Known limits
 
-- The ledger records what the tab saw **while it was open**, plus what the Host recorder reports. A job that starts and ends entirely while the tab is closed *and* has already fallen out of the recorder's ring cannot be counted.
+- The Host ledger records the settlements it witnessed; jobs that settled before the recorder row was ever loaded cannot be recovered (their outcome existed only in a process that is gone).
 - **Before the Host half is composed** (no restart yet, or a composition without a web server), a collected command's outcome is not observable: its record is removed as soon as the call collected the output, often inside the coalescing window that would have reported the settlement. Those rows are shown as **已结束 / ended** — no success, no failure, no running — and the success-rate figure then covers reported outcomes only.
 - An ended record still waiting for its outcome has its duration measured from its start to its last sighting (when the Host retired it, within a second or so).
-- The ledger is capped at 300 records per session; the oldest settled records are evicted first. The recorder's ring is capped at 2000 settlements per process.
+- Two ledgers cooperate: the Host's durable one (200 per session, across restarts) and the tab's own browser-storage ledger (300 per session, so the rows you watched stay put even if the Host route is unreachable).
 - The panel is read-only: stopping a job stays in the session header's job list.
 
 ## How it works

@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-09-25
+
+### Added
+
+- **The Host ledger is durable.** The recorder kept its settled records in process memory only, so a restart lost them and a panel could not show what the previous run did. They are now written to `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json` (temp file then rename, at most one write a second, plus a flush when the row unloads) and read back at load, so a panel opened after a restart still shows each session's settled jobs with their real outcomes.
+- **Bounds, as requested**: up to **200 settled records per session** (oldest settlements dropped first) and up to 32 sessions (the least recently settled dropped first), with each label truncated at 2000 characters. Measured: 200 records of realistic command lines ≈ 53 KB; the worst case ≈ 420 KB.
+
+### Notes
+
+- The file is a cache of settled jobs: deleting it at any time is safe, and a missing or corrupt one starts empty instead of refusing to boot. Without `DSH_HOME`/`DSH_PROFILE` in the environment nothing is written at all — the ledger stays in memory.
+- Specs now run against a throwaway `DSH_HOME`, because the ledger resolves its path from the environment: a spec that forgot this wrote into the real profile's ledger.
+
 ## [1.3.0] — 2026-09-25
 
 ### Added
