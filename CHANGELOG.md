@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-09-25
+
+### Added
+
+- **Plain-language summaries.** A row's first line now says what the task is doing instead of quoting the command: the panel splits the label into statements, skips setup (`cd …`, assignments, pipelines' input stages, `2>&1` redirections) and recognises the action — `git commit` → 提交代码, `pnpm install` → 安装依赖, `Start-Sleep -Seconds 75` → 等待 75 秒, `Get-Content` → 读取文件, a vitest run → 跑测试, plus interpreters, PowerShell cmdlets, containers and build tools. Recognition covers the shapes a tool script actually produces, including a program held in a variable (`& $node $pnpm install …` → 安装依赖).
+- **Detail on demand.** Every row is a button: clicking it expands the full command, job id, kind, status, start and finish clock, terminal reason and retained output. The exact command also stays in the row's tooltip, and the one small stylesheet inline styles cannot express (hover, focus ring, detail separator) is installed once per document and removed on disposal.
+
+### Notes
+
+- Recognition is conservative both ways: an unrecognised command is shown as it is, and a label that is already a description is left alone — a wrong summary would be worse than the raw text. 20 command shapes are pinned by spec, plus the three that must stay unsummarised.
+- The model's own one-line `description` argument never reaches the job record: `dsh-tool-pwsh` and `dsh-tool-bash` register `label: args.command`, so the panel derives its summary locally instead of reading a field that is not there.
+
 ## [1.2.1] — 2026-09-25
 
 ### Fixed

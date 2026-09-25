@@ -65,6 +65,59 @@ window.__ModuleLoader__.load({
       statusUnknown: '状态未知',
       rowUntitled: '（未命名任务）',
       rowUnknownKind: '未知类型',
+      expandHint: '点击查看完整命令',
+      descWait: '等待',
+      descWaitSeconds: '等待 {seconds} 秒',
+      descVersion: '查看 {tool} 版本',
+      descChangeDir: '切换目录',
+      descTest: '跑测试',
+      descBuild: '构建项目',
+      descLint: '检查代码',
+      descFormat: '格式化代码',
+      descInstall: '安装依赖',
+      descRunScript: '运行脚本 {script}',
+      descRunTool: '运行 {tool}',
+      descPublish: '发布包',
+      descToolSub: '运行 {tool} {sub}',
+      descGitStatus: '查看仓库状态',
+      descGitAdd: '暂存改动',
+      descGitCommit: '提交代码',
+      descGitPush: '推送提交',
+      descGitPull: '拉取更新',
+      descGitFetch: '获取远端更新',
+      descGitDiff: '查看改动',
+      descGitLog: '查看提交历史',
+      descGitBranch: '切换/查看分支',
+      descGitClone: '克隆或初始化仓库',
+      descGitTag: '打标签',
+      descGitRemote: '查看远端配置',
+      descGitStash: '暂存工作区',
+      descGitInspect: '解析提交信息',
+      descReadFile: '读取文件',
+      descWriteFile: '写入文件',
+      descListFiles: '列出文件',
+      descSearchText: '搜索文本',
+      descDelete: '删除文件',
+      descCreate: '新建文件或目录',
+      descCopy: '复制文件',
+      descMove: '移动或重命名',
+      descProcess: '查看进程',
+      descStartProcess: '启动进程',
+      descNetwork: '请求网络接口',
+      descInspectPath: '检查路径或文件信息',
+      descOutput: '输出信息',
+      descNode: '运行 Node 代码',
+      descNodeScript: '运行 {script}',
+      descPython: '运行 Python 代码',
+      descPythonScript: '运行 {script}',
+      fieldCommand: '完整命令',
+      fieldId: '任务 ID',
+      fieldKind: '类型',
+      fieldStatus: '状态',
+      fieldStarted: '开始',
+      fieldFinished: '结束',
+      fieldDetail: '结束原因',
+      fieldOutput: '保留输出',
       durationUnknown: '—',
       durationSeconds: '{seconds}秒',
       durationMinutes: '{minutes}分{seconds}秒',
@@ -108,6 +161,59 @@ window.__ModuleLoader__.load({
       statusUnknown: 'unknown status',
       rowUntitled: '(untitled job)',
       rowUnknownKind: 'unknown kind',
+      expandHint: 'Click to see the full command',
+      descWait: 'wait',
+      descWaitSeconds: 'wait {seconds}s',
+      descVersion: 'check the {tool} version',
+      descChangeDir: 'change directory',
+      descTest: 'run tests',
+      descBuild: 'build the project',
+      descLint: 'lint the code',
+      descFormat: 'format code',
+      descInstall: 'install dependencies',
+      descRunScript: 'run the {script} script',
+      descRunTool: 'run {tool}',
+      descPublish: 'publish the package',
+      descToolSub: 'run {tool} {sub}',
+      descGitStatus: 'check the working tree',
+      descGitAdd: 'stage changes',
+      descGitCommit: 'commit changes',
+      descGitPush: 'push commits',
+      descGitPull: 'pull updates',
+      descGitFetch: 'fetch from the remote',
+      descGitDiff: 'review the diff',
+      descGitLog: 'read the commit history',
+      descGitBranch: 'switch or list branches',
+      descGitClone: 'clone or initialise a repository',
+      descGitTag: 'tag a release',
+      descGitRemote: 'inspect remotes',
+      descGitStash: 'stash the working tree',
+      descGitInspect: 'inspect commit metadata',
+      descReadFile: 'read a file',
+      descWriteFile: 'write a file',
+      descListFiles: 'list files',
+      descSearchText: 'search text',
+      descDelete: 'delete files',
+      descCreate: 'create a file or directory',
+      descCopy: 'copy files',
+      descMove: 'move or rename',
+      descProcess: 'inspect processes',
+      descStartProcess: 'start a process',
+      descNetwork: 'make a network request',
+      descInspectPath: 'inspect a path',
+      descOutput: 'print a value',
+      descNode: 'run Node code',
+      descNodeScript: 'run {script}',
+      descPython: 'run Python code',
+      descPythonScript: 'run {script}',
+      fieldCommand: 'Full command',
+      fieldId: 'Job id',
+      fieldKind: 'Kind',
+      fieldStatus: 'Status',
+      fieldStarted: 'Started',
+      fieldFinished: 'Finished',
+      fieldDetail: 'Terminal reason',
+      fieldOutput: 'Retained output',
       durationUnknown: '—',
       durationSeconds: '{seconds}s',
       durationMinutes: '{minutes}m {seconds}s',
@@ -211,6 +317,401 @@ window.__ModuleLoader__.load({
       if (job === null || typeof job !== 'object') return undefined;
       if (typeof job.progress === 'string' && job.progress !== '') return job.progress;
       if (typeof job.detail === 'string' && job.detail !== '') return job.detail;
+      return undefined;
+    }
+
+    /** Program names a tool script may hold in a variable (`$pnpm`, `$node`). */
+    const KNOWN_TOOLS = new Set([
+      'npm', 'pnpm', 'yarn', 'bun', 'node', 'nodejs', 'python', 'python3', 'py',
+      'git', 'dotnet', 'docker', 'kubectl', 'vitest', 'jest', 'tsc',
+    ]);
+
+    /** Package-manager verbs, so an interpreter line still says what it does. */
+    const PACKAGE_VERBS = new Set([
+      'install', 'i', 'ci', 'add', 'test', 'run', 'build', 'lint', 'format', 'publish',
+    ]);
+
+    /** The first known tool mentioned in a lower-cased fragment, if any. */
+    function knownToolIn(fragment) {
+      for (const tool of KNOWN_TOOLS) {
+        if (new RegExp(`(?:^|[\\s/\\\\$])${tool}\\b`, 'u').test(fragment)) return tool;
+      }
+      return undefined;
+    }
+
+    /** Strip one layer of matching quotes from one shell word. */
+    function unquote(word) {
+      const text = typeof word === 'string' ? word.trim() : '';
+      if (text.length >= 2 && (text.startsWith('"') || text.startsWith("'")) && text.endsWith(text[0])) {
+        return text.slice(1, -1);
+      }
+      return text;
+    }
+
+    /** First whitespace-separated word of a fragment, unquoted. */
+    function firstWord(fragment) {
+      const text = typeof fragment === 'string' ? fragment.trim() : '';
+      if (text === '') return '';
+      return unquote(text.split(/\s+/u)[0]);
+    }
+
+    /** The fragment without its first word. */
+    function afterFirstWord(fragment) {
+      const text = typeof fragment === 'string' ? fragment.trim() : '';
+      const index = text.search(/\s/u);
+      return index < 0 ? '' : text.slice(index).trim();
+    }
+
+    /** First number in a fragment, as written. */
+    function firstNumber(fragment) {
+      return /(\d+(?:\.\d+)?)/u.exec(typeof fragment === 'string' ? fragment : '')?.[1];
+    }
+
+    /** Basename of a path-like word, so 「运行 {script}」 copy stays short. */
+    function basename(word) {
+      const text = unquote(word);
+      const parts = text.split(/[\\/]/u);
+      return parts[parts.length - 1] === '' ? text : parts[parts.length - 1];
+    }
+
+    /**
+     * Split a command into its top-level statements.
+     *
+     * Separators inside quotes, braces, parens or brackets (a hashtable literal, a
+     * quoted string) do not split; a pipeline does, so the last stage — the action —
+     * is what a caller inspects first.
+     * @param command - the raw command text.
+     * @returns the trimmed statements, in order.
+     */
+    function splitStatements(command) {
+      const parts = [];
+      let current = '';
+      let quote = '';
+      let escaped = false;
+      let depth = 0;
+      for (const character of command) {
+        if (escaped) {
+          // PowerShell's backtick escapes the next character (a line continuation,
+          // an escaped quote): it never opens a quoted region.
+          current += character;
+          escaped = false;
+          continue;
+        }
+        if (quote !== '') {
+          current += character;
+          if (character === quote) quote = '';
+          continue;
+        }
+        if (character === '`') {
+          current += character;
+          escaped = true;
+          continue;
+        }
+        if (character === "'" || character === '"') {
+          quote = character;
+          current += character;
+          continue;
+        }
+        if (character === '{' || character === '(' || character === '[') depth += 1;
+        if (character === '}' || character === ')' || character === ']') depth = Math.max(0, depth - 1);
+        // `&` separates statements, but `2>&1` is a redirection: keep it whole.
+        const redirection = /[\d>]\s*$/u.test(current);
+        if (depth === 0 && (character === ';' || character === '\n' || character === '|' || (character === '&' && !redirection))) {
+          parts.push(current);
+          current = '';
+          continue;
+        }
+        current += character;
+      }
+      parts.push(current);
+      return parts.map((part) => part.trim()).filter((part) => part !== '');
+    }
+
+    /** Words of a statement, unquoted, with a leading call operator dropped. */
+    function statementWords(statement) {
+      return statement.trim().replace(/^[&.]\s+/u, '').split(/\s+/u).map(unquote).filter((word) => word !== '');
+    }
+
+    /**
+     * Describe a statement whose program is a variable (`& $node '…\vitest.mjs' run`).
+     *
+     * The tool scripts this panel mostly sees launch their real program through a
+     * variable, so the recognisable name is the first argument that is not a flag —
+     * and a runner file name anywhere in the line decides it outright.
+     * @param rest - everything after the variable.
+     * @returns the description, or undefined when nothing recognisable follows.
+     */
+    function describeThroughVariable(rest) {
+      const lower = rest.toLowerCase();
+      if (/(?:^|[\s/\\])(?:vitest|jest|pytest|playwright|cypress)(?:\.(?:mjs|cjs|js))?\b/u.test(lower)) return { key: 'descTest' };
+      const words = statementWords(rest);
+      const program = words.find((word) => !word.startsWith('-') && word !== '');
+      if (program === undefined) return undefined;
+      return describeStatement([program, ...words.slice(words.indexOf(program) + 1)].join(' '));
+    }
+
+    /** Recognise a git invocation. */
+    function describeGit(rest) {
+      const sub = firstWord(rest).toLowerCase();
+      switch (sub) {
+        case 'status': return { key: 'descGitStatus' };
+        case 'add': return { key: 'descGitAdd' };
+        case 'commit': return { key: 'descGitCommit' };
+        case 'push': return { key: 'descGitPush' };
+        case 'pull': return { key: 'descGitPull' };
+        case 'fetch': return { key: 'descGitFetch' };
+        case 'diff':
+        case 'show': return { key: 'descGitDiff' };
+        case 'log':
+        case 'shortlog':
+        case 'blame': return { key: 'descGitLog' };
+        case 'checkout':
+        case 'switch':
+        case 'branch': return { key: 'descGitBranch' };
+        case 'clone':
+        case 'init': return { key: 'descGitClone' };
+        case 'tag': return { key: 'descGitTag' };
+        case 'remote': return { key: 'descGitRemote' };
+        case 'stash': return { key: 'descGitStash' };
+        case 'rev-parse':
+        case 'rev-list':
+        case 'describe': return { key: 'descGitInspect' };
+        default: return sub === '' ? undefined : { key: 'descToolSub', values: { tool: 'git', sub } };
+      }
+    }
+
+    /** Recognise a package-manager invocation. */
+    function describePackageManager(tool, rest) {
+      const sub = firstWord(rest).toLowerCase();
+      const tail = afterFirstWord(rest);
+      switch (sub) {
+        case 'install':
+        case 'i':
+        case 'add':
+        case 'ci': return { key: 'descInstall' };
+        case 'test':
+        case 't': return { key: 'descTest' };
+        case 'build': return { key: 'descBuild' };
+        case 'lint': return { key: 'descLint' };
+        case 'format': return { key: 'descFormat' };
+        case 'run':
+        case 'run-script': return firstWord(tail) === '' ? undefined : { key: 'descRunScript', values: { script: firstWord(tail) } };
+        case 'exec':
+        case 'dlx':
+        case 'x': {
+          const inner = firstWord(tail);
+          if (inner === '') return undefined;
+          return describeStatement(tail) ?? { key: 'descRunTool', values: { tool: inner } };
+        }
+        case 'publish': return { key: 'descPublish' };
+        case 'version': return { key: 'descVersion', values: { tool } };
+        default: return sub === '' ? undefined : { key: 'descToolSub', values: { tool, sub } };
+      }
+    }
+
+    /**
+     * What one statement does, as a locale key plus its values.
+     *
+     * Recognition is deliberately conservative: a statement it does not understand
+     * returns undefined and the panel keeps showing the command itself, because a
+     * wrong summary is worse than the raw text.
+     * @param text - one statement.
+     * @returns the description, or undefined when the statement is not recognised.
+     */
+    function describeStatement(text) {
+      let statement = typeof text === 'string' ? text.trim() : '';
+      // A leading assignment (`$x = …`) is setup: the action is what follows.
+      const assignment = /^\$[A-Za-z_][\w:]*\s*=\s*/u.exec(statement);
+      if (assignment !== null) statement = statement.slice(assignment[0].length).trim();
+      statement = statement.replace(/^[&.]\s+/u, '').trim();
+      if (statement === '') return undefined;
+      const rawFirst = unquote(statement.split(/\s+/u)[0]);
+      const bare = rawFirst.replace(/\.(?:exe|cmd|bat|ps1)$/iu, '').toLowerCase();
+      const rest = afterFirstWord(statement);
+      const lower = rest.toLowerCase();
+      // `& $node '…\vitest.mjs' run`, `$pnpm install`: the tool scripts this panel
+      // mostly sees keep their program in a variable. A variable named after the
+      // tool is that tool; anything else has to be recognised from its arguments.
+      if (bare.startsWith('$')) {
+        const named = bare.slice(1);
+        if (KNOWN_TOOLS.has(named)) return describeStatement(`${named} ${rest}`);
+        return describeThroughVariable(rest);
+      }
+      const program = bare;
+      // `--version` on anything is the same question.
+      if (/^--?v(?:ersion)?$/u.test(rest)) return { key: 'descVersion', values: { tool: program } };
+
+      switch (program) {
+        case 'cd':
+        case 'chdir':
+        case 'set-location': return { key: 'descChangeDir' };
+        case 'start-sleep':
+        case 'sleep': {
+          const seconds = firstNumber(rest);
+          return seconds === undefined ? { key: 'descWait' } : { key: 'descWaitSeconds', values: { seconds } };
+        }
+        case 'git': return describeGit(rest);
+        case 'npm':
+        case 'pnpm':
+        case 'yarn':
+        case 'bun': return describePackageManager(program, rest);
+        case 'node':
+        case 'nodejs': {
+          if (/(?:^|[\s/\\])(?:vitest|jest|mocha|ava|tap)\b/u.test(lower)) return { key: 'descTest' };
+          const words = statementWords(rest);
+          // `& $node $pnpm install …`: an interpreter line that is really a
+          // package-manager call keeps the verb, so the row still says what it does.
+          const verbIndex = words.findIndex((word) => PACKAGE_VERBS.has(word.toLowerCase()));
+          if (verbIndex >= 0) {
+            const manager = knownToolIn(lower) ?? 'node';
+            return describePackageManager(manager, words.slice(verbIndex).join(' ')) ?? { key: 'descNode' };
+          }
+          const target = firstWord(rest);
+          if (target === '') return undefined;
+          if (target.startsWith('-') || target.startsWith('$')) return { key: 'descNode' };
+          return { key: 'descNodeScript', values: { script: basename(target) } };
+        }
+        case 'python':
+        case 'python3':
+        case 'py': {
+          const script = firstWord(rest);
+          if (script === '' || script.startsWith('-')) return { key: 'descPython' };
+          return { key: 'descPythonScript', values: { script: basename(script) } };
+        }
+        case 'npx':
+        case 'pnpx':
+        case 'uvx': {
+          const inner = firstWord(rest);
+          if (inner === '') return undefined;
+          return describeStatement(rest) ?? { key: 'descRunTool', values: { tool: inner } };
+        }
+        case 'vitest':
+        case 'jest':
+        case 'pytest':
+        case 'playwright':
+        case 'cypress':
+        case 'mocha': return { key: 'descTest' };
+        case 'tsc':
+        case 'webpack':
+        case 'rollup': return { key: 'descBuild' };
+        case 'eslint':
+        case 'ruff':
+        case 'pylint':
+        case 'stylelint': return { key: 'descLint' };
+        case 'prettier':
+        case 'black':
+        case 'gofmt': return { key: 'descFormat' };
+        case 'get-content':
+        case 'gc':
+        case 'cat':
+        case 'type':
+        case 'head':
+        case 'tail':
+        case 'less':
+        case 'more': return { key: 'descReadFile' };
+        case 'set-content':
+        case 'sc':
+        case 'add-content':
+        case 'out-file':
+        case 'set-item':
+        case 'tee': return { key: 'descWriteFile' };
+        case 'get-childitem':
+        case 'gci':
+        case 'ls':
+        case 'dir':
+        case 'tree': return { key: 'descListFiles' };
+        case 'select-string':
+        case 'sls':
+        case 'findstr':
+        case 'grep':
+        case 'rg':
+        case 'where-object': return { key: 'descSearchText' };
+        case 'remove-item':
+        case 'ri':
+        case 'del':
+        case 'erase':
+        case 'rm':
+        case 'rmdir': return { key: 'descDelete' };
+        case 'new-item':
+        case 'ni':
+        case 'mkdir':
+        case 'md':
+        case 'touch': return { key: 'descCreate' };
+        case 'copy-item':
+        case 'cpi':
+        case 'cp':
+        case 'copy':
+        case 'robocopy':
+        case 'xcopy': return { key: 'descCopy' };
+        case 'move-item':
+        case 'mi':
+        case 'mv':
+        case 'move':
+        case 'rename-item':
+        case 'ren': return { key: 'descMove' };
+        case 'get-process':
+        case 'gps':
+        case 'tasklist': return { key: 'descProcess' };
+        case 'start-process':
+        case 'start': return { key: 'descStartProcess' };
+        case 'invoke-restmethod':
+        case 'irm':
+        case 'invoke-webrequest':
+        case 'iwr':
+        case 'curl':
+        case 'wget': return { key: 'descNetwork' };
+        case 'test-path':
+        case 'get-item':
+        case 'gi':
+        case 'resolve-path':
+        case 'stat': return { key: 'descInspectPath' };
+        case 'echo':
+        case 'write-output':
+        case 'write-host':
+        case 'printf': return { key: 'descOutput' };
+        case 'dotnet':
+        case 'gradle':
+        case 'gradlew':
+        case 'mvn':
+        case 'maven':
+        case 'cargo':
+        case 'go':
+        case 'make':
+        case 'cmake':
+        case 'msbuild': {
+          const sub = firstWord(rest).toLowerCase();
+          if (sub === 'test') return { key: 'descTest' };
+          if (sub === 'build' || sub === 'publish' || sub === 'package' || sub === 'assemble') return { key: 'descBuild' };
+          if (sub === 'run') return { key: 'descRunTool', values: { tool: program } };
+          return sub === '' ? undefined : { key: 'descToolSub', values: { tool: program, sub } };
+        }
+        case 'docker':
+        case 'docker-compose':
+        case 'kubectl':
+        case 'helm': {
+          const sub = firstWord(rest).toLowerCase();
+          return sub === '' ? undefined : { key: 'descToolSub', values: { tool: program, sub } };
+        }
+        default: break;
+      }
+      return undefined;
+    }
+
+    /**
+     * Summarise a job's label as "what it is doing", when the label is a command
+     * this panel recognises.
+     * @param label - the job's label (the producer's own line, often the command).
+     * @returns a locale key and values, or undefined to show the label as it is.
+     */
+    function describeCommand(label) {
+      if (typeof label !== 'string' || label.trim() === '') return undefined;
+      const statements = splitStatements(label);
+      // The last recognised statement is the action: earlier ones are setup
+      // (`cd …`, an assignment) and a pipeline's earlier stages are inputs.
+      for (let index = statements.length - 1; index >= 0; index -= 1) {
+        const described = describeStatement(statements[index]);
+        if (described !== undefined) return described;
+      }
       return undefined;
     }
 
@@ -583,8 +1084,17 @@ window.__ModuleLoader__.load({
       });
     }
 
-    /** One task line: status, command label, kind/status/reason, elapsed time. */
+    /** Clock text for one timestamp, in the reader's own time zone. */
+    function clockText(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+      const date = new Date(value);
+      const pad = (part) => String(part).padStart(2, '0');
+      return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    /** One task line: a plain-language summary, expandable to the raw command and its facts. */
     function JobRow({ job, now, t }) {
+      const [open, setOpen] = React.useState(false);
       const status = statusOf(job);
       const rawLabel = job === null || typeof job !== 'object' ? undefined : job.label;
       const label = typeof rawLabel === 'string' && rawLabel !== '' ? rawLabel : t('rowUntitled');
@@ -594,20 +1104,61 @@ window.__ModuleLoader__.load({
       const detail = jobDetail(job);
       const meta = detail === undefined ? `${kind} · ${statusText}` : `${kind} · ${statusText} · ${detail}`;
       const elapsed = durationMs(job, now);
+      // What the task is doing, when the label is a command this panel recognises;
+      // otherwise the label itself, so nothing is ever invented.
+      const described = describeCommand(label);
+      const title = described === undefined ? label : format(t(described.key), described.values ?? {});
+      const startedAt = job === null || typeof job !== 'object' ? undefined : clockText(job.startedAt);
+      const finishedAt = job === null || typeof job !== 'object' ? undefined : clockText(job.finishedAt);
+      const bytes = job === null || typeof job !== 'object' ? undefined : (job.output?.total ?? job.bytes);
+      const facts = [
+        { key: 'command', label: t('fieldCommand'), value: label, mono: true },
+        { key: 'id', label: t('fieldId'), value: String(job?.id ?? '') || t('rowUntitled') },
+        { key: 'kind', label: t('fieldKind'), value: kind },
+        { key: 'status', label: t('fieldStatus'), value: statusText },
+        ...(startedAt === undefined ? [] : [{ key: 'started', label: t('fieldStarted'), value: startedAt }]),
+        ...(finishedAt === undefined ? [] : [{ key: 'finished', label: t('fieldFinished'), value: finishedAt }]),
+        ...(detail === undefined ? [] : [{ key: 'detail', label: t('fieldDetail'), value: detail }]),
+        ...(typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0
+          ? [{ key: 'output', label: t('fieldOutput'), value: formatBytes(bytes, t) }]
+          : []),
+      ];
       return h('li', {
         'data-role': 'job-row',
         'data-status': status,
         style: dockStyles.row,
       }, [
-        h(StatusDot, { key: 'dot', status }),
-        h('div', { key: 'main', style: dockStyles.rowMain }, [
-          h('span', { key: 'label', style: dockStyles.rowLabel, title: label }, label),
-          h('span', { key: 'meta', style: dockStyles.rowMeta, title: meta }, meta),
+        h('button', {
+          key: 'toggle',
+          type: 'button',
+          'data-role': 'job-row-toggle',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-label': t('expandHint'),
+          title: label,
+          onClick: () => setOpen((value) => !value),
+          style: dockStyles.rowButton,
+        }, [
+          h(StatusDot, { key: 'dot', status }),
+          h('span', { key: 'main', style: dockStyles.rowMain }, [
+            h('span', { key: 'label', 'data-role': 'job-row-title', style: dockStyles.rowLabel }, title),
+            h('span', { key: 'meta', 'data-role': 'job-row-meta', style: dockStyles.rowMeta }, meta),
+          ]),
+          h('span', {
+            key: 'time',
+            style: dockStyles.rowTime,
+          }, elapsed === undefined ? t('durationUnknown') : formatDuration(elapsed, t)),
         ]),
-        h('span', {
-          key: 'time',
-          style: dockStyles.rowTime,
-        }, elapsed === undefined ? t('durationUnknown') : formatDuration(elapsed, t)),
+        open ? h('dl', {
+          key: 'facts',
+          'data-role': 'job-row-detail',
+          style: dockStyles.rowDetail,
+        }, facts.map((fact) => h('div', { key: fact.key, style: dockStyles.detailRow }, [
+          h('dt', { key: 'label', style: dockStyles.detailLabel }, fact.label),
+          h('dd', {
+            key: 'value',
+            style: fact.mono === true ? dockStyles.detailCommand : dockStyles.detailValue,
+          }, fact.value),
+        ]))) : null,
       ]);
     }
 
@@ -639,6 +1190,26 @@ window.__ModuleLoader__.load({
         h('span', { key: 'label', style: dockStyles.figureLabel }, label),
         h('span', { key: 'value', style: dockStyles.figureValue }, value),
       ]);
+    }
+
+    /** One small stylesheet inline styles cannot express: hover, focus, separators. */
+    const STYLE_TAG = 'dsh-client-ui-job-stats/styles';
+
+    /** Install that stylesheet once; returns a disposer that removes it. */
+    function installStyles() {
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') return () => {};
+      if (document.querySelector(`style[data-plugin-css="${STYLE_TAG}"]`) !== null) return () => {};
+      const style = document.createElement('style');
+      style.dataset.pluginCss = STYLE_TAG;
+      style.textContent = [
+        '[data-plugin="dsh-client-ui-job-stats"] [data-role="job-row-toggle"]:hover{background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08))}',
+        '[data-plugin="dsh-client-ui-job-stats"] [data-role="job-row-toggle"]:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary, #3b82f6);outline-offset:-2px}',
+        '[data-plugin="dsh-client-ui-job-stats"] [data-role="job-row-detail"]{border-top:1px dashed var(--dsw-alias-border-l1, rgba(127,127,127,.24))}',
+      ].join('\n');
+      document.head.append(style);
+      return () => {
+        style.remove();
+      };
     }
 
     /** The statistics glyph, at the size its host asks for. */
@@ -975,11 +1546,55 @@ window.__ModuleLoader__.load({
         overscrollBehavior: 'contain',
       },
       row: {
+        borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.16))',
+      },
+      rowButton: {
         display: 'flex',
         alignItems: 'flex-start',
         gap: '8px',
+        boxSizing: 'border-box',
+        width: '100%',
         padding: '8px 10px',
-        borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.16))',
+        border: 'none',
+        background: 'none',
+        color: 'inherit',
+        font: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+      },
+      rowDetail: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+        margin: 0,
+        padding: '6px 10px 8px 26px',
+        fontSize: '11px',
+        lineHeight: '16px',
+        color: 'var(--dsw-alias-label-tertiary, currentColor)',
+      },
+      detailRow: {
+        display: 'flex',
+        gap: '8px',
+        minWidth: 0,
+      },
+      detailLabel: {
+        flex: 'none',
+        width: '56px',
+      },
+      detailValue: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        margin: 0,
+        wordBreak: 'break-all',
+      },
+      detailCommand: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        margin: 0,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+        color: 'var(--dsw-alias-label-secondary, currentColor)',
+        fontFamily: 'var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
       },
       rowMain: {
         display: 'flex',
@@ -1053,6 +1668,7 @@ window.__ModuleLoader__.load({
             return () => {};
           }
         }, 'job-stats: dictionaries');
+        ctx.effect(() => installStyles(), 'job-stats: stylesheet');
         try {
           const bound = ctx.locale.bind(NS);
           if (typeof bound === 'function') translate = bound;

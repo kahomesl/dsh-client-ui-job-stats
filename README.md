@@ -30,7 +30,9 @@ This plugin adds a **statistics** seat next to it, inside the right Sidebar:
 |---|---|
 | Counts | 合计 / 运行中 / 已完成 / 已失败 / 已取消 / 已结束 (total / running / completed / failed / cancelled / ended) |
 | Figures | success rate over reported outcomes (completed ÷ settled), accumulated duration, longest single job, retained output bytes |
-| Detail list | one row per task: status dot, command label, kind · status · reason, elapsed time; the list scrolls on its own, with a pinned head |
+| Detail list | one row per task: status dot, summary line, kind · status · reason, elapsed time; the list scrolls on its own, with a pinned head |
+| Plain-language summaries | a recognised command reads as what it does — 等待 75 秒 / 提交代码 / 跑测试 / 安装依赖 — in the host language, instead of quoting the code |
+| Detail on demand | click a row to expand it: the full command, job id, kind, status, start and finish clock, terminal reason and retained output |
 | Live clock | running jobs tick once a second while the tab is open |
 | Ledger | per-session, merged by job id, persisted in browser storage (300 records, oldest settled evicted first) |
 | Defensive | unknown statuses, missing ids, forged fields and an unreadable ledger never throw and never blank the tab |
@@ -84,6 +86,12 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
 3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
 4. **Outcomes come from the Host.** While the panel is open it polls the recorder row's route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. The recorder keeps the last 2000 settlements in the process, keyed by session, and a 405/404/unreachable route simply leaves the panel on its own ledger.
+
+### Task summaries
+
+The row's first line is a summary of what the task is doing, derived locally from its label (which for a shell job is the command itself): the panel splits the command into statements, skips setup (`cd …`, assignments, redirections) and recognisers the action — `git commit` → 提交代码, `pnpm install` → 安装依赖, `Start-Sleep -Seconds 75` → 等待 75 秒, `Get-Content` → 读取文件, a vitest run → 跑测试, and so on for git, package managers, interpreters, PowerShell cmdlets, containers and build tools.
+
+Recognition is deliberately conservative in both directions: a command it does not understand is shown **as it is**, and a label that is already a description (some producers write one) is left alone — a wrong summary would be worse than the raw text. The exact command is always one click away, and it stays in the row's tooltip.
 
 ### Known limits
 

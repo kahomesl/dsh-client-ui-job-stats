@@ -1,6 +1,6 @@
 {
   "name": "dsh-client-ui-job-stats",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "private": true,
   "description": "Session background-job statistics for DeepSeek Harness: a right Sidebar tab that accumulates every job the session ran (totals per status, success rate, duration, retained output, per-task detail), in Simplified Chinese and English.",
   "license": "MIT",

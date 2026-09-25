@@ -123,7 +123,7 @@ describe('the screenshot roster, in Chinese', () => {
   test('keeps the screenshot’s settling order: newest settled first', () => {
     const view = renderRoster(SCREENSHOT_ROSTER);
     const labels = [...view.container.querySelectorAll('[data-role="job-row"]')]
-      .map((row) => row.querySelector('span[title]').textContent);
+      .map((row) => row.querySelector('[data-role="job-row-title"]').textContent);
     // finishedAt: 42s, 30s, 12s, 8s after the same start.
     expect(labels).toEqual([
       'Diagnose network access to Wikipedia',

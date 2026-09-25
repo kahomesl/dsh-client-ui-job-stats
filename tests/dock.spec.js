@@ -8,7 +8,7 @@
  * tab *renders* for the session it was opened in.
  */
 import React from 'react';
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createContext, entryOf, format, materialize } from './support/harness.js';
 
@@ -227,7 +227,7 @@ describe('dock panel', () => {
     const { view } = renderDock(settled);
     const list = rows(view.container);
     expect(list).toHaveLength(4);
-    expect(list.map((row) => row.querySelector('span[title]').textContent))
+    expect(list.map((row) => row.querySelector('[data-role="job-row-title"]').textContent))
       .toEqual(['检索资料', '生成图片', '访问维基百科', '等待统计稳定']);
     expect(list[2].textContent).toContain('Bash · 已失败 · exit 1');
     expect(list[3].textContent).toContain('已取消');
@@ -374,6 +374,118 @@ describe('dock panel', () => {
     const svg = view.container.querySelector('svg');
     expect(svg.getAttribute('width')).toBe('26');
     expect(svg.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('task summaries and the expandable command', () => {
+  /** The title line one row shows. */
+  const title = (row) => row.querySelector('[data-role="job-row-title"]').textContent;
+
+  test('says what a recognised command does instead of quoting it', () => {
+    const cases = [
+      ['Start-Sleep -Seconds 75; $h=@{ \'Use…\' }', '等待 75 秒'],
+      ['cd D:\\AI\\x; git add -A; git commit -q -m "fix: x"', '提交代码'],
+      ['git push origin main', '推送提交'],
+      ['git status --short', '查看仓库状态'],
+      ['git --version', '查看 git 版本'],
+      ["cd D:\\AI\\x; $p='package.json'; $c=Get-Content $p -Raw", '读取文件'],
+      ["$node='C:\\node.exe'; & $node $pnpm install 2>&1 | Select-Object -Last 12", '安装依赖'],
+      ["cd D:\\AI\\x; $node='C:\\node.exe'; & $node 'D:\\vitest.mjs' run", '跑测试'],
+      ['node D:\\proj\\node_modules\\vitest\\vitest.mjs run', '跑测试'],
+      ['pnpm install 2>&1 | Select-Object -Last 12', '安装依赖'],
+      ['npm run build --silent', '运行脚本 build'],
+      ['tsc --noEmit', '构建项目'],
+      ['Remove-Item node_modules -Recurse -Force', '删除文件'],
+      ['New-Item -ItemType Directory -Force -Path docs', '新建文件或目录'],
+      ["Invoke-WebRequest -Uri 'https://api.github.com/repos/x' -UseBasicParsing", '请求网络接口'],
+      ['Get-ChildItem -Force | Select-Object Mode,Name | Format-Table', '列出文件'],
+      ["Get-Content README.md | Select-String -Pattern '重启'", '搜索文本'],
+      ['python -c "print(1)"', '运行 Python 代码'],
+      ['docker compose up -d', '运行 docker compose'],
+      ['echo hello', '输出信息'],
+    ];
+    const { view } = renderDock(cases.map(([command], index) => job({ id: `job-${index}`, label: command })));
+    const rendered = rows(view.container).map(title);
+    for (const [index, [command, expected]] of cases.entries()) {
+      expect(rendered[index], `recognising: ${command}`).toBe(expected);
+    }
+  });
+
+  test('shows an unrecognised command as it is rather than guessing', () => {
+    const { view } = renderDock([
+      job({ id: 'a', label: 'some-unknown-tool --flag' }),
+      job({ id: 'b', label: "$pkgs = @('@a/b','@c/d'); foreach ($p in $pkgs) { x }" }),
+      // A producer that already wrote a description keeps it: it is not a command.
+      job({ id: 'c', label: 'Run the full gate sequence' }),
+      job({ id: 'd', label: '（未命名任务）' }),
+    ]);
+    expect(rows(view.container).map(title)).toEqual([
+      'some-unknown-tool --flag',
+      "$pkgs = @('@a/b','@c/d'); foreach ($p in $pkgs) { x }",
+      'Run the full gate sequence',
+      '（未命名任务）',
+    ]);
+  });
+
+  test('clicking a row reveals the command and its facts, clicking again hides them', () => {
+    const command = 'cd D:\\AI\\x; git add -A; git commit -q -m "feat: y"';
+    const startedAt = BASE;
+    const { view } = renderDock([
+      job({ id: 'pwsh-7', label: command, kind: 'pwsh', status: 'failed', detail: 'exit code: 1', startedAt, finishedAt: startedAt + 6_000, output: { total: 2_048 } }),
+    ]);
+    const [row] = rows(view.container);
+    expect(title(row)).toBe('提交代码');
+    expect(row.querySelector('[data-role="job-row-detail"]')).toBeNull();
+
+    const toggle = row.querySelector('[data-role="job-row-toggle"]');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('title')).toBe(command);
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    const detail = rows(view.container)[0].querySelector('[data-role="job-row-detail"]');
+    expect(detail).not.toBeNull();
+    expect(rows(view.container)[0].querySelector('[data-role="job-row-toggle"]').getAttribute('aria-expanded')).toBe('true');
+    const text = detail.textContent;
+    expect(text).toContain('完整命令');
+    expect(text).toContain(command);
+    expect(text).toContain('pwsh-7');
+    expect(text).toContain('pwsh');
+    expect(text).toContain('已失败');
+    expect(text).toContain('exit code: 1');
+    expect(text).toContain('2.0 KB');
+    // Two clock readings, formatted locally, one per timestamp.
+    expect(detail.textContent.match(/\d\d:\d\d:\d\d/gu)).toHaveLength(2);
+
+    act(() => {
+      fireEvent.click(rows(view.container)[0].querySelector('[data-role="job-row-toggle"]'));
+    });
+    expect(rows(view.container)[0].querySelector('[data-role="job-row-detail"]')).toBeNull();
+  });
+
+  test('installs its stylesheet once and removes it on disposal', () => {
+    const selector = 'style[data-plugin-css="dsh-client-ui-job-stats/styles"]';
+    document.querySelectorAll(selector).forEach((node) => node.remove());
+    const first = materialize();
+    const harness = createContext({ rows: { 'session-tab': [job({})] } });
+    harness.declareFrame();
+    first.face.apply(harness.ctx);
+    expect(document.querySelectorAll(selector)).toHaveLength(1);
+    const css = document.querySelector(selector).textContent;
+    expect(css).toContain('[data-role="job-row-toggle"]:hover');
+    expect(css).toContain(':focus-visible');
+
+    // A second mount in the same document reuses the tag instead of duplicating it.
+    const second = materialize();
+    const other = createContext({ rows: { 'session-tab': [job({})] } });
+    other.declareFrame();
+    second.face.apply(other.ctx);
+    expect(document.querySelectorAll(selector)).toHaveLength(1);
+
+    harness.dispose();
+    other.dispose();
+    expect(document.querySelectorAll(selector)).toHaveLength(0);
   });
 });
 
