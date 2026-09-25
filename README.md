@@ -4,65 +4,61 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.2-informational)
 
-**Session background-job statistics for DeepSeek Harness: a right Sidebar tab that keeps a running ledger of every job the session ran.**
+**DeepSeek Harness 的会话后台任务统计：右侧边栏的一个标签页，累计记录本会话跑过的每一个任务。**
 
-中文说明见 [README.zh.md](README.zh.md).
+**中文** | [English](README.en.md)
 
-![The job-statistics panel](docs/screenshot-jobs.png)
-![A task row expanded to its full command](docs/screenshot-detail.png)
+![后台任务统计面板](docs/screenshot-jobs.png)
+![点开一行后显示完整命令](docs/screenshot-detail.png)
 
-Both images are produced by `pnpm preview` from the plugin's own components — the
-same `client/client.js` the Host serves, mounted with the props the renderer
-composes and the app's dark-theme token values — over sample job rows, because a
-screenshot of a live session would show whatever that session ran. They are declared
-in [`screenshots.json`](screenshots.json), which is what storefronts read.
+这两张图由 `pnpm preview` 用插件**自己的组件**渲染而成 —— 与宿主实际提供的 `client/client.js` 是同一个文件，按渲染器组装的 props 挂载、配色取应用真实深色主题的 token 值，只有任务行是示例数据（真实会话的截图会暴露那个会话跑过什么）。它们声明在 [`screenshots.json`](screenshots.json) 里，插件市场读的就是它。
 
 ---
 
-## What it is
+## 它是什么
 
-DeepSeek Harness ships a *live* job roster in the session header: it lists what the session can currently see, and a foreground command's record leaves that roster the moment the call that started it collects the output. That makes it a good progress indicator and a poor statistics view — a task flashes and disappears.
+Harness 自带的会话头部「后台任务」列表是一张**实时名册**：只列会话当前还看得到的任务，而前台命令一旦被调用方取走输出，它的记录就会从名册里消失。所以它适合看"现在在跑什么"，不适合当统计 —— 任务会闪一下就没了。
 
-This plugin adds a **statistics** seat next to it, inside the right Sidebar:
+本插件在右侧边栏里补了一个**统计**席位：
 
-- **Where** — expand the right Sidebar (the session header's 「打开侧边栏」 button / `Ctrl+Alt+B`). The column's start page gains a fourth card, **Background job stats**, next to the shipped 工作区文件 / 新建终端 / 浏览器 types. Picking it opens the panel as a dock tab.
-- **What** — totals per status, success rate, accumulated and longest duration, retained output, and a per-task list (status, kind, duration, terminal reason), ordered live-first then newest-settled-first.
-- **Scope** — one tab per session: the panel shows the session it was opened in, and nothing else.
-- **Language** — Simplified Chinese and English, following the host language.
-- **Accumulation** — the panel remembers every job it has seen, so finished tasks stay in the statistics instead of vanishing from the live roster.
+- **在哪** —— 展开右侧边栏（会话头部的「打开侧边栏」按钮 / `Ctrl+Alt+B`），栏内「开始」页会多出第 4 张卡片 **「后台任务统计」**，与随附的「工作区文件 / 新建终端 / 浏览器」并列；点开即在栏内以标签页形式显示面板。
+- **显示什么** —— 各状态计数、完成率、累计耗时、最长耗时、保留输出，以及每个任务的明细（状态、类型、耗时、结束原因）；排序为"运行中在前，已结束按结束时间倒序"。
+- **范围** —— 一个会话一个标签页：面板只统计它是从哪个会话打开的。
+- **语言** —— 简体中文与英文，跟随宿主语言。
+- **累计** —— 面板记住它见过的每个任务，因此任务结束后仍留在统计里，而不是随名册消失。
 
-## Features
+## 功能
 
 | | |
 |---|---|
-| Counts | 合计 / 运行中 / 已完成 / 已失败 / 已取消 / 已结束 (total / running / completed / failed / cancelled / ended) |
-| Figures | success rate over reported outcomes (completed ÷ settled), accumulated duration, longest single job, retained output bytes |
-| Detail list | one row per task: status dot, summary line, kind · status · reason, elapsed time; the list scrolls on its own, with a pinned head |
-| Plain-language summaries | a recognised command reads as what it does — 等待 75 秒 / 提交代码 / 跑测试 / 安装依赖 — in the host language, instead of quoting the code |
-| Detail on demand | click a row to expand it: the full command, job id, kind, status, start and finish clock, terminal reason and retained output |
-| Live clock | running jobs tick once a second while the tab is open |
-| Ledger | per-session, merged by job id, persisted in browser storage (300 records, oldest settled evicted first) |
-| Defensive | unknown statuses, missing ids, forged fields and an unreadable ledger never throw and never blank the tab |
+| 计数 | 合计 / 运行中 / 已完成 / 已失败 / 已取消 / 已结束 |
+| 指标 | 完成率（只统计**已上报结果**的任务）、累计耗时、最长耗时、保留输出字节数 |
+| 明细 | 每任务一行：状态点、概述、类型 · 状态 · 原因、耗时；列表自身可滚动（表头固定） |
+| 说人话 | 能识别的命令显示"在干什么"—— 等待 75 秒 / 提交代码 / 跑测试 / 安装依赖 —— 而不是把代码原样贴出来 |
+| 点击展开 | 点一下任务行展开：完整命令、任务 ID、类型、状态、开始/结束时刻、结束原因、保留输出 |
+| 实时 | 有任务在跑时，耗时每秒刷新 |
+| 台账 | 按会话分开、按 job id 合并、写入浏览器存储（上限 300 条，超出先淘汰最早已结束的） |
+| 健壮 | 未知状态、缺 id、字段异常、台账损坏都不会抛错，也不会让面板变空 |
 
-## Install
+## 安装
 
-The plugin is a normal Harness bundle. Install it into a profile from a checkout (this is how it is used on the development machine):
+插件就是一个普通的 Harness 组合包（bundle），从源码目录以 link 方式装进某个 profile：
 
 ```bash
 git clone https://github.com/kahomesl/dsh-client-ui-job-stats.git
 ```
 
-1. In your profile directory (the one whose `package.json` lists `dsh.profile.bundles`, e.g. `~/.dsh/profiles/desktop`), add the package as a local link and select it as a bundle:
+1. 在该 profile 目录（`package.json` 里列着 `dsh.profile.bundles` 的那个，例如 `~/.dsh/profiles/desktop`）中，把它加为本地依赖并选为组合包：
 
    ```jsonc
    {
      "dependencies": {
-       "dsh-client-ui-job-stats": "link:/absolute/path/to/dsh-client-ui-job-stats"
+       "dsh-client-ui-job-stats": "link:/本机绝对路径/dsh-client-ui-job-stats"
      },
      "dsh": {
        "profile": {
          "bundles": [
-           // …your existing bundles…
+           // …原有的组合包…
            "dsh-client-ui-job-stats"
          ]
        }
@@ -70,98 +66,96 @@ git clone https://github.com/kahomesl/dsh-client-ui-job-stats.git
    }
    ```
 
-2. Install it:
+2. 安装：
 
    ```bash
    pnpm install
    ```
 
-3. Expand the right Sidebar — the **Background job stats** card is on its start page. The host re-reads a changed client bundle on its own, so the panel needs no restart.
-4. **Restart DSH once.** The Host half (the outcome recorder) is a Loader row, and rows from a bundle patch are composed at boot; until that restart the panel works but can only report the roster's own story (see *Known limits*). A restart is needed once per install, not per update.
+3. 展开右侧边栏，「开始」页上就有 **「后台任务统计」** 卡片。宿主会自行重新读取变更过的客户端 bundle，面板本身不需要重启。
+4. **重启一次 DSH。** 宿主侧半成品（终态记录器）是一条 Loader 行，而 bundle patch 里的行是在**启动时**组合的；重启之前面板照常工作，但只能讲名册自己知道的故事（见"已知限制"）。每次安装需要重启一次，之后的更新不需要。
 
-`cordis.patch.yml` in this package inserts both of its Loader rows; nothing else in the profile is touched.
+包内的 `cordis.patch.yml` 只做两件事：向组合插入两条 Loader 行 —— `job-stats` → 本包（由它发布浏览器半侧）与 `job-stats-recorder` → 本包的 `./recorder` 子路径（宿主半侧）；不改动 profile 里的其它任何东西。
 
-**Disable / uninstall** — remove the name from `dsh.profile.bundles` to switch it off (keep the dependency to switch it back on), or remove both entries and run `pnpm install` again to uninstall.
+**停用 / 卸载** —— 从 `dsh.profile.bundles` 里删掉包名即可停用（保留依赖随时可再打开）；两处都删掉再 `pnpm install` 即卸载。
 
-**Requires** `@deepseek-ai/dsh-client-ui-sidebar-right` and `@deepseek-ai/dsh-api-job-controller` in the composition. Without them the plugin simply stays inactive — it never fails activation.
+**依赖** 组合里需要有 `@deepseek-ai/dsh-client-ui-sidebar-right` 与 `@deepseek-ai/dsh-api-job-controller`。没有它们时插件保持"未激活"，不会激活失败。
 
-## How the numbers are computed
+## 数字是怎么来的
 
-The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/dsh-api-job-controller`), and adds a ledger on top:
+面板读 `ctx.jobs`（`@deepseek-ai/dsh-api-job-controller` 暴露给浏览器的任务名册镜像），并在其之上加了一层台账：
 
-1. While the tab is mounted it holds the session's roster stream open (`ctx.jobs.watchRows(sessionId)`); the stream's first frame is already the whole truth.
-2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
-3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
-4. **Outcomes come from the Host.** The recorder row subscribes to the registry's `settled` events — the one witness of a collected command's terminal state — and keeps them **durably** in `.job-stats/ledger.json` inside the profile. The panel polls the route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. Because that ledger is the Host's, a panel opened after a restart still shows what the previous run settled — browser storage is not part of this path.
+1. 标签页挂载期间保持该会话的名册流打开（`ctx.jobs.watchRows(sessionId)`）；流的首帧就是完整事实。
+2. 每一帧按 job id 合并进该会话的台账 —— 状态、耗时、结束原因、保留字节数原地更新，同一个任务不会出现两次。
+3. 统计与明细都从台账算出，所以任务被宿主移除后仍留在面板里。台账持久化在浏览器存储的 `dsh-job-stats/v2/<sessionId>` 下（写入有节流；存储写满或损坏时自动退回"仅内存"）。只有终态记录会被读回，刷新页面不会复活一条假的"运行中"。
+4. **终态来自宿主并落盘**：记录器行订阅注册表的 `settled` 事件（前台命令终态的唯一见证者），把它们**持久化**在 profile 内的 `.job-stats/ledger.json`。面板每 2 秒轮询该路由（按 `document.baseURI` 相对解析）并合并：名册抛弃的行会变成真实的 已完成/已失败/已取消（带结束原因），标签页没见过运行过程的任务也会带着结局补进来。因为台账在宿主侧，**重启后再打开面板仍能看到上一次运行结算的任务** —— 这条链路不依赖浏览器存储。
 
-### The ledger file
+### 台账文件
 
 | | |
 |---|---|
-| Path | `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json`, beside the profile's own files (with no `DSH_HOME`/`DSH_PROFILE` in the environment the ledger stays in memory rather than writing somewhere unexpected) |
-| Records | up to **200 per session**, oldest settlements dropped first; up to 32 sessions, the least recently settled dropped first |
-| Size | 200 records of realistic command lines ≈ **53 KB**; the worst case (every label at the 2000-character cap) ≈ 420 KB |
-| Writes | after each settlement, at most once a second, plus one flush when the row unloads; temp file then rename, so a crash cannot leave it half written |
-| Deleting it | Always safe: it is a record of settled jobs, and the next settlements rebuild it. |
+| 路径 | `<DSH_HOME>/profiles/<profile>/.job-stats/ledger.json`（与 profile 自己的文件并列；环境里没有 `DSH_HOME`/`DSH_PROFILE` 时只留在内存，不往别处写） |
+| 条数 | **每会话最多 200 条**，超出先淘汰最早的结算；最多 32 个会话，超出先淘汰最久没结算的 |
+| 体积 | 200 条真实命令 ≈ **53 KB**；最坏情况（每条命令都到 2000 字符上限）≈ 420 KB |
+| 写入 | 每次结算后写一次、每秒最多一次，行卸载时再刷一次；先写临时文件再改名，崩溃不会留下半个文件 |
+| 删除 | 任何时候都可以删：它只是已结算任务的记录，后续结算会重新建立 |
 
-### Task summaries
+### 任务概述从哪来
 
-The row's first line is a summary of what the task is doing, derived locally from its label (which for a shell job is the command itself): the panel splits the command into statements, skips setup (`cd …`, assignments, redirections) and recognisers the action — `git commit` → 提交代码, `pnpm install` → 安装依赖, `Start-Sleep -Seconds 75` → 等待 75 秒, `Get-Content` → 读取文件, a vitest run → 跑测试, and so on for git, package managers, interpreters, PowerShell cmdlets, containers and build tools.
+任务行的第一行是"这个任务在干什么"，由面板**本地**从 label（shell 任务的 label 就是命令本身）归纳：先把命令拆成语句、跳过准备动作（`cd …`、变量赋值、重定向），再识别真正的动作 —— `git commit` → 提交代码、`pnpm install` → 安装依赖、`Start-Sleep -Seconds 75` → 等待 75 秒、`Get-Content` → 读取文件、vitest → 跑测试；git、包管理器、解释器、PowerShell cmdlet、容器与构建工具都有覆盖。
 
-Recognition is deliberately conservative in both directions: a command it does not understand is shown **as it is**, and a label that is already a description (some producers write one) is left alone — a wrong summary would be worse than the raw text. The exact command is always one click away, and it stays in the row's tooltip.
+识别在两个方向上都刻意保守：**认不出来的命令原样显示**；label 本身就是描述的任务（有些 producer 会这么写）不会被改写 —— 归纳错了比显示原文更糟。完整命令永远只差一次点击，也保留在行的悬浮提示里。
 
-### Known limits
+### 已知限制
 
-- The Host ledger records the settlements it witnessed; jobs that settled before the recorder row was ever loaded cannot be recovered (their outcome existed only in a process that is gone).
-- **Before the Host half is composed** (no restart yet, or a composition without a web server), a collected command's outcome is not observable: its record is removed as soon as the call collected the output, often inside the coalescing window that would have reported the settlement. Those rows are shown as **已结束 / ended** — no success, no failure, no running — and the success-rate figure then covers reported outcomes only.
-- An ended record still waiting for its outcome has its duration measured from its start to its last sighting (when the Host retired it, within a second or so).
-- Two ledgers cooperate: the Host's durable one (200 per session, across restarts) and the tab's own browser-storage ledger (300 per session, so the rows you watched stay put even if the Host route is unreachable).
-- The panel is read-only: stopping a job stays in the session header's job list.
+- 台账记录**标签页开着**时看到过的任务，外加宿主记录器上报的终态。若某任务在标签页关闭期间开始并结束、且已经从记录器环形缓冲里被淘汰，则无法统计。
+- **宿主半侧尚未组合时**（还没重启，或组合里没有 web server），前台命令的结局不可观测：工具在调用方取走输出时就把记录从名册删掉了，而名册流是合并后再读列表的，所以"已结算"这一帧读不到 —— 面板只看到它"运行中"，随后就不见了。这类记录只显示为**已结束** —— 不算运行中，也不硬猜成已完成或已失败；此时「完成率」只覆盖已上报结果的结算任务。
+- 还在等待结局的「已结束」记录，耗时 = 从开始到最后一次被看到（宿主把它撤下名册的时刻，误差约一秒内）。
+- 宿主台账记录的是它亲眼看过的结算；在记录器行加载之前就已结束的任务无法补回（它们的终态只存在于那个已经消失的进程里）。两本台账并存：宿主那本持久（每会话 200 条、跨重启），标签页自己那本在浏览器存储里（每会话 300 条，路由不可达时也保住你看到过的行）。
+- 面板是只读统计；停止任务仍由会话头部的任务列表负责。
 
-## How it works
+## 实现方式
 
-Two halves, no build step:
+两侧、零构建：
 
-| File | Role |
+| 文件 | 作用 |
 |---|---|
-| `package.json` | Manifest: `dsh.bundle.patch` (the composition patch) and `dsh.client` (the browser half, platform `web`) |
-| `cordis.patch.yml` | Inserts two Loader rows: `job-stats` → the package (it publishes the browser half) and `job-stats-recorder` → its `./recorder` subpath (the Host half) |
-| `lib/index.js` | Node half: a Loader-visible no-op; the browser half carries the UI |
-| `lib/recorder.js` | Host half: records job outcomes off the registry's event stream and serves them on `/dsh-job-stats/outcomes` |
-| `client/client.js` | Browser half: the tab type, its start-page card, and the panel |
+| `package.json` | 清单：`dsh.bundle.patch`（组合补丁）+ `dsh.client`（浏览器半侧，platform `web`） |
+| `cordis.patch.yml` | 插入两条 Loader 行：`job-stats` → 本包（发布浏览器半侧）、`job-stats-recorder` → `./recorder` 子路径（宿主半侧） |
+| `lib/index.js` | 宿主半侧：Loaders 可见的空实现；界面在浏览器侧 |
+| `lib/recorder.js` | 宿主半侧：从注册表事件流记录任务终态，并在 `/dsh-job-stats/outcomes` 上提供 |
+| `client/client.js` | 浏览器半侧：标签类型、开始页卡片、统计面板 |
 
-Registrations, all through public contracts:
+三处注册，全部走公开契约：
 
-| Registration | Seat | Effect |
+| 注册 | 席位 | 效果 |
 |---|---|---|
-| `ctx.sidebarRightTabs.register({ id, kind: 'job-stats', title, guide })` | right Sidebar tab registry | the type, its tab-strip label, and the start-page card |
-| `sidebar.right.pane.tab` (keyed by the type id) | dock pane (session scope) | the panel body; the session id arrives in its props |
-| `sidebar.right.pane.tab.title` (keyed by the type id) | dock tab strip | the plugin's glyph before the type label |
-| `ctx.jobs.events.subscribe({ owners: 'all' }, …)` (Host) | job registry event stream | terminal projections, including the settlements the roster never delivers to the browser |
-| `ctx.webServer.register({ kind: 'exact', path: '/dsh-job-stats/outcomes' })` (Host) | Host routes | the JSON the panel reads its outcomes from |
+| `ctx.sidebarRightTabs.register({ id, kind: 'job-stats', title, guide })` | 右侧边栏标签注册表 | 标签类型、标签条标题、开始页卡片 |
+| `sidebar.right.pane.tab`（以类型 id 为键） | 栏内面板（session 作用域） | 面板正文；`sessionId` 由宿主从标签页传入 |
+| `sidebar.right.pane.tab.title`（以类型 id 为键） | 标签条 | 类型标签前的自定义图标 |
 
-Design rules the implementation follows:
+实现遵守的几条规则：
 
-- **No Harness Client package is imported.** React comes from the browser module table (`require('react')`) and the panel draws its own markup, so a rebuilt Host cannot blank the entry.
-- **Theme tokens only** (`--dsw-*`, with literal fallbacks): light and dark themes come for free.
-- **Optional-service scoping** — the whole contribution sits inside `ctx.inject(['sidebarRightTabs'], …)`, so a composition without the right Sidebar keeps the plugin inactive instead of throwing.
-- **No side effects in the module factory**; registration and teardown are owned by `ctx.effect`, and disposal leaves the registry clean.
+- **不导入任何 Harness 客户端包**：React 来自浏览器模块表（`require('react')`），面板自绘控件，宿主升级不会让入口变空。
+- **只用主题 token**（`--dsw-*`，附字面量兜底），亮/暗色自动适配。
+- **可选服务作用域**：整个贡献放在 `ctx.inject(['sidebarRightTabs'], …)` 内，没有右侧边栏的组合只是不激活，而不是抛错。
+- **模块工厂无副作用**：注册与拆卸都由 `ctx.effect` 持有，卸载后注册表干净。
 
-## Development
+## 开发与测试
 
 ```bash
 pnpm install
-pnpm test        # 34 specs: manifest, tab-type + seat registration, panel behaviour, ledger
+pnpm test        # 34 个用例：包清单、标签类型与席位注册、面板行为、台账
 ```
 
-The specs are deliberately real rather than mocked: the browser half is loaded the way a page loads it (a classic script registering one lazy factory into `window.__ModuleLoader__`), the slot registry is the production `SlotCore` from `@deepseek-ai/dsh-client-ui-slots`, and the panel is rendered by real React with the props the renderer composes. A malformed manifest or a registration the shell cannot address therefore fails in CI, not in the running page.
+规格刻意用真实实现而不是桩：浏览器半侧按页面加载它的方式载入（一段经典脚本向 `window.__ModuleLoader__` 注册一个惰性 factory），slot 注册表是 `@deepseek-ai/dsh-client-ui-slots` 里生产的 `SlotCore`，面板由真实 React 以渲染器组装的 props 渲染。于是"清单写错""注册了外壳寻址不到的席位"这类问题会在 CI 里失败，而不是在运行中的页面里翻车。
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the verification checklist used before a change ships.
+改动前的验证清单见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## Compatibility
+## 兼容性
 
-Verified on DeepSeek Harness **0.1.7-rc.2** (DSH Desktop, Windows 11, 125 % display scaling): the Loader row composes, the host serves the browser half with a matching revision, and the card and panel render in the right Sidebar.
+已在 DeepSeek Harness **0.1.7-rc.2**（DSH Desktop，Windows 11，125% 显示缩放）验证：Loader 行能组合、宿主按匹配的 revision 提供浏览器半侧、开始页卡片与栏内面板均正常渲染。
 
-## License
+## 许可
 
 [MIT](LICENSE)
