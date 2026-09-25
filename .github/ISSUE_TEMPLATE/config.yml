@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: DeepSeek Harness itself
+    url: https://github.com/deepseek-ai/deepseek-harness
+    about: Host behaviour that is not about this plugin (job roster semantics, sidebar shell, slots) belongs there.

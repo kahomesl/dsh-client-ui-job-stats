@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in the panel, the card, or the ledger is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The plugin renders inside a sidebar, so a few facts
+        decide whether the fault is here or in the Host — please fill them in.
+  - type: input
+    id: harness
+    attributes:
+      label: Harness build
+      description: DSH Desktop / `dsh` version, and how the plugin was installed (profile, `link:` path).
+      placeholder: "DSH Desktop 0.1.7-rc.2, profile desktop, link:/path/to/dsh-client-ui-job-stats"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it go wrong
+      options:
+        - The card is missing from the right Sidebar's start page
+        - The tab opens but the panel is empty or wrong
+        - The numbers are wrong (counts, durations, output)
+        - The ledger lost or duplicated a task
+        - The panel crashed / went blank
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      description: Include the job's own status as the session header's job list shows it, when that differs.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a background command with run_in_background
+        2. Open the right Sidebar → Background job stats
+        3. …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console or Host diagnostics
+      description: Any `slot entry crashed` line, a desktop `crash-*-web-boot.log`, or a screenshot. Redact paths you would rather not share.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I ran `pnpm test` on this checkout and it passes.
+        - label: I looked for an existing issue that covers this.

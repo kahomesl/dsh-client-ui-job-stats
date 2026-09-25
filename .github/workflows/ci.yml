@@ -29,8 +29,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
+      # The committed lockfile is the contract: a dependency change that was not
+      # installed locally fails here instead of drifting.
       - name: Install
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Syntax check the browser half
         run: node --check client/client.js
