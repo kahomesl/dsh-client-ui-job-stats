@@ -339,6 +339,9 @@ window.__ModuleLoader__.load({
           if (isLive(record)) previous.seenAt = seenAt;
           continue;
         }
+        // Never downgrade a record whose outcome the Host already reported: a roster
+        // frame produced before the settlement can arrive after it (two channels).
+        if (previous !== undefined && !isLive(previous) && isLive(record)) continue;
         if (previous !== undefined && isLive(previous) && !isLive(record)) settledNow = true;
         entry.records.set(record.id, record);
         changed = true;
@@ -397,6 +400,91 @@ window.__ModuleLoader__.load({
           : record);
       }
       return rows;
+    }
+
+    /** Route the Host half records terminated jobs on; resolved document-relatively. */
+    const OUTCOMES_PATH = 'dsh-job-stats/outcomes';
+    /** How often the panel asks for recorded outcomes while it is open. */
+    const OUTCOMES_POLL_MS = 2000;
+
+    /**
+     * Resolve the outcomes route against the page the UI is served from.
+     *
+     * A root-absolute URL would miss a host mounted under a prefix, so the path is
+     * resolved against `document.baseURI` — the pattern the shipped market UI uses.
+     * @param sessionId - the session whose outcomes are wanted.
+     * @returns the path (and query) to fetch.
+     */
+    function outcomesUrl(sessionId) {
+      const relative = `${OUTCOMES_PATH}?sessionId=${encodeURIComponent(String(sessionId))}`;
+      if (typeof document === 'undefined' || typeof document.baseURI !== 'string') return `/${relative}`;
+      try {
+        const resolved = new URL(relative, document.baseURI);
+        return `${resolved.pathname}${resolved.search}`;
+      } catch {
+        return `/${relative}`;
+      }
+    }
+
+    /**
+     * Read the Host's recorded outcomes.
+     * @param sessionId - the session whose outcomes are wanted.
+     * @returns the outcome records, or undefined when the recorder is not composed.
+     */
+    async function fetchOutcomes(sessionId) {
+      if (typeof fetch !== 'function') return undefined;
+      try {
+        const response = await fetch(outcomesUrl(sessionId), { headers: { accept: 'application/json' } });
+        if (response === null || typeof response !== 'object' || response.ok !== true) return undefined;
+        const body = await response.json();
+        return body !== null && typeof body === 'object' && Array.isArray(body.outcomes) ? body.outcomes : undefined;
+      } catch {
+        // A composition without the recorder row leaves the panel on its own ledger.
+        return undefined;
+      }
+    }
+
+    /**
+     * Merge recorded outcomes into one session's ledger.
+     *
+     * The Host is the only witness of a collected command's terminal state, which is
+     * what turns a row the roster abandoned into a real 已完成 / 已失败 / 已取消 —
+     * including jobs this tab never saw while they ran.
+     * @param sessionId - the session the outcomes belong to.
+     * @param outcomes - records as served by the recorder row.
+     * @returns whether the ledger changed.
+     */
+    function mergeOutcomes(sessionId, outcomes) {
+      if (sessionId === undefined || outcomes.length === 0) return false;
+      const entry = ledgerFor(sessionId);
+      const seenAt = Date.now();
+      let changed = false;
+      for (const outcome of outcomes) {
+        if (outcome === null || typeof outcome !== 'object') continue;
+        if (typeof outcome.id !== 'string' || outcome.id === '') continue;
+        const status = outcome.status;
+        if (status !== 'completed' && status !== 'failed' && status !== 'killed') continue;
+        const record = {
+          id: outcome.id,
+          kind: typeof outcome.kind === 'string' ? outcome.kind : '',
+          label: typeof outcome.label === 'string' ? outcome.label : '',
+          status,
+          startedAt: typeof outcome.startedAt === 'number' && Number.isFinite(outcome.startedAt) ? outcome.startedAt : 0,
+          ...(typeof outcome.finishedAt === 'number' && Number.isFinite(outcome.finishedAt) ? { finishedAt: outcome.finishedAt } : {}),
+          ...(typeof outcome.detail === 'string' && outcome.detail !== '' ? { detail: outcome.detail } : {}),
+          bytes: typeof outcome.bytes === 'number' && Number.isFinite(outcome.bytes) && outcome.bytes > 0 ? outcome.bytes : 0,
+          seenAt,
+        };
+        const previous = entry.records.get(record.id);
+        if (previous !== undefined && !isLive(previous) && sameRecord(previous, record)) continue;
+        entry.records.set(record.id, record);
+        changed = true;
+      }
+      if (changed) {
+        pruneLedger(entry);
+        persistLedger(sessionId, entry, true);
+      }
+      return changed;
     }
 
     /**
@@ -627,6 +715,26 @@ window.__ModuleLoader__.load({
           return undefined;
         }
       }, [sessionId, watchRows]);
+
+      // Outcomes the roster cannot carry: the Host records them, the panel asks for
+      // them while it is open. Polling (rather than pushing) keeps this a plain read
+      // with no stream of its own.
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined;
+        let active = true;
+        const sync = () => {
+          fetchOutcomes(sessionId).then((outcomes) => {
+            if (!active || outcomes === undefined) return;
+            if (mergeOutcomes(sessionId, outcomes)) setLedgerVersion((version) => version + 1);
+          });
+        };
+        sync();
+        const timer = setInterval(sync, OUTCOMES_POLL_MS);
+        return () => {
+          active = false;
+          clearInterval(timer);
+        };
+      }, [sessionId]);
 
       React.useEffect(() => {
         if (!live) return undefined;

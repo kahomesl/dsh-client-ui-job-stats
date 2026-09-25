@@ -1,6 +1,6 @@
 {
   "name": "dsh-client-ui-job-stats",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Session background-job statistics for DeepSeek Harness: a right Sidebar tab that accumulates every job the session ran (totals per status, success rate, duration, retained output, per-task detail), in Simplified Chinese and English.",
   "license": "MIT",
@@ -26,6 +26,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./client/client.js",
+    "./recorder": "./lib/recorder.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -42,6 +43,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.2",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.3.2",

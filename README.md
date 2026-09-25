@@ -67,9 +67,10 @@ git clone https://github.com/kahomesl/dsh-client-ui-job-stats.git
    pnpm install
    ```
 
-3. Expand the right Sidebar — the **Background job stats** card is on its start page. The host re-reads a changed client bundle on its own, so no restart is needed.
+3. Expand the right Sidebar — the **Background job stats** card is on its start page. The host re-reads a changed client bundle on its own, so the panel needs no restart.
+4. **Restart DSH once.** The Host half (the outcome recorder) is a Loader row, and rows from a bundle patch are composed at boot; until that restart the panel works but can only report the roster's own story (see *Known limits*). A restart is needed once per install, not per update.
 
-`cordis.patch.yml` in this package inserts the Loader row (`job-stats` → `dsh-client-ui-job-stats`); nothing else in the profile is touched.
+`cordis.patch.yml` in this package inserts both of its Loader rows; nothing else in the profile is touched.
 
 **Disable / uninstall** — remove the name from `dsh.profile.bundles` to switch it off (keep the dependency to switch it back on), or remove both entries and run `pnpm install` again to uninstall.
 
@@ -82,13 +83,14 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 1. While the tab is mounted it holds the session's roster stream open (`ctx.jobs.watchRows(sessionId)`); the stream's first frame is already the whole truth.
 2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
 3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
+4. **Outcomes come from the Host.** While the panel is open it polls the recorder row's route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. The recorder keeps the last 2000 settlements in the process, keyed by session, and a 405/404/unreachable route simply leaves the panel on its own ledger.
 
 ### Known limits
 
-- The ledger records what the tab saw **while it was open**. A job that starts and ends entirely while the tab is closed is not replayed by the roster, so it cannot be counted.
-- **A collected command's outcome is not observable.** The Host removes a foreground command's record as soon as the call that started it collected the output, often inside the same coalescing window that would have reported the settlement — so the panel sees it running and then gone. Those records are shown as **已结束 / ended** with *outcome not reported* rather than being guessed into 已完成 or 已失败; the success-rate figure therefore covers reported outcomes only. Jobs that keep their record (a `run_in_background` job, a promoted command, anything whose output nobody collected yet) do report a real terminal status.
-- An ended record's duration is the time from its start to its last sighting, which is when the Host retired it (within a second or so).
-- The ledger is capped at 300 records per session; the oldest settled records are evicted first.
+- The ledger records what the tab saw **while it was open**, plus what the Host recorder reports. A job that starts and ends entirely while the tab is closed *and* has already fallen out of the recorder's ring cannot be counted.
+- **Before the Host half is composed** (no restart yet, or a composition without a web server), a collected command's outcome is not observable: its record is removed as soon as the call collected the output, often inside the coalescing window that would have reported the settlement. Those rows are shown as **已结束 / ended** with *outcome not reported* rather than being guessed into 已完成 or 已失败, and the success-rate figure then covers reported outcomes only.
+- An ended record still waiting for its outcome has its duration measured from its start to its last sighting (when the Host retired it, within a second or so).
+- The ledger is capped at 300 records per session; the oldest settled records are evicted first. The recorder's ring is capped at 2000 settlements per process.
 - The panel is read-only: stopping a job stays in the session header's job list.
 
 ## How it works
@@ -98,8 +100,9 @@ Two halves, no build step:
 | File | Role |
 |---|---|
 | `package.json` | Manifest: `dsh.bundle.patch` (the composition patch) and `dsh.client` (the browser half, platform `web`) |
-| `cordis.patch.yml` | Inserts one Loader row: `job-stats` → `dsh-client-ui-job-stats` |
-| `lib/index.js` | Node half: a Loader-visible no-op; the feature lives in the browser |
+| `cordis.patch.yml` | Inserts two Loader rows: `job-stats` → the package (it publishes the browser half) and `job-stats-recorder` → its `./recorder` subpath (the Host half) |
+| `lib/index.js` | Node half: a Loader-visible no-op; the browser half carries the UI |
+| `lib/recorder.js` | Host half: records job outcomes off the registry's event stream and serves them on `/dsh-job-stats/outcomes` |
 | `client/client.js` | Browser half: the tab type, its start-page card, and the panel |
 
 Registrations, all through public contracts:
@@ -109,6 +112,8 @@ Registrations, all through public contracts:
 | `ctx.sidebarRightTabs.register({ id, kind: 'job-stats', title, guide })` | right Sidebar tab registry | the type, its tab-strip label, and the start-page card |
 | `sidebar.right.pane.tab` (keyed by the type id) | dock pane (session scope) | the panel body; the session id arrives in its props |
 | `sidebar.right.pane.tab.title` (keyed by the type id) | dock tab strip | the plugin's glyph before the type label |
+| `ctx.jobs.events.subscribe({ owners: 'all' }, …)` (Host) | job registry event stream | terminal projections, including the settlements the roster never delivers to the browser |
+| `ctx.webServer.register({ kind: 'exact', path: '/dsh-job-stats/outcomes' })` (Host) | Host routes | the JSON the panel reads its outcomes from |
 
 Design rules the implementation follows:
 

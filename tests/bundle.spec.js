@@ -24,17 +24,25 @@ describe('package manifest', () => {
     expect(manifest.exports['./client']).toBe('./client/client.js');
     expect(existsSync(resolve(root, 'client/client.js'))).toBe(true);
     expect(existsSync(resolve(root, 'lib/index.js'))).toBe(true);
+    // The recorder row is named by subpath, so the export map has to carry it.
+    expect(manifest.exports['./recorder']).toBe('./lib/recorder.js');
+    expect(existsSync(resolve(root, 'lib/recorder.js'))).toBe(true);
   });
 
-  test('ships a bundle patch that inserts exactly its own row', () => {
+  test('ships a bundle patch that inserts its two rows', () => {
     const patchPath = manifest.dsh.bundle.patch;
     expect(patchPath).toBe('./cordis.patch.yml');
     const patch = read(patchPath.replace(/^\.\//u, ''));
-    // The row name must be the package name: that is what makes the Loader import
-    // this package, and what makes client-modules publish its browser half.
+    // The first row name must be the bare package name: that is what makes the
+    // Loader import this package, and what makes client-modules publish its browser
+    // half. The second row is the Host-side recorder, which must NOT be a bare
+    // specifier — a subpath is invisible to the client-module scanner, so the two
+    // rows cannot claim the same browser module.
     expect(patch).toContain('insert:');
-    expect(patch).toContain(`id: job-stats`);
+    expect(patch).toContain('id: job-stats');
     expect(patch).toContain(`name: '${manifest.name}'`);
+    expect(patch).toContain('id: job-stats-recorder');
+    expect(patch).toContain(`name: '${manifest.name}/recorder'`);
     expect(patch.match(/insert:/gu)).toHaveLength(1);
   });
 

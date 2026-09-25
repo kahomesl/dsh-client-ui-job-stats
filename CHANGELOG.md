@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-09-25
+
+### Added
+
+- **Host-side outcome recorder** (`lib/recorder.js`, its own Loader row `job-stats-recorder` → the package's `./recorder` subpath). A collected command's settlement never reaches the browser: the Host removes the record as soon as the call that started it collected the output, frequently inside the coalescing window that would have reported it. The registry's event stream does carry that projection, and it is emitted before any removal — so the recorder subscribes to `ctx.jobs.events` (`{ owners: 'all' }`), keeps a bounded ring of the last 2000 terminal records per session, and serves them on `GET /dsh-job-stats/outcomes` (`?sessionId=` filters, unowned jobs are shared).
+- The panel now polls that route document-relatively (`document.baseURI`, the pattern the shipped market UI uses) and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with its terminal reason, and a job the tab never saw while it ran is added with its outcome. A 404/405/unreachable route leaves the panel on its own ledger.
+- `lib/index.js` and the recorder are two rows on purpose: a bundle-patch row must be the bare package specifier for client-modules to publish the browser half, and a subpath specifier is invisible to that scanner — so the two rows cannot claim the same browser module.
+
+### Notes
+
+- **A restart is required once per install**: Loader rows from a bundle patch are composed at boot, and Host modules are imported once (a running Host does not pick up a brand-new row on a recompose — verified on 0.1.7-rc.2). Until then the panel behaves exactly as in 1.1.0.
+
 ## [1.1.0] — 2026-09-25
 
 ### Fixed

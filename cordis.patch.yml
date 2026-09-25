@@ -1,7 +1,15 @@
-# dsh bundle patch: inserts this plugin's Loader row into the profile roster.
-# The row name resolves through the profile's dependency on this package; the
-# browser half declared by package.json's `dsh.client` registers the sidebar
-# entry and its page, while the node half (lib/index.js) is a load-bearing no-op.
+# dsh bundle patch: inserts this plugin's Loader rows into the profile roster.
+#
+# Two rows, one package:
+#   - `job-stats` resolves the bare package, which is what makes client-modules
+#     publish the browser half (the tab type, the start-page card, the panel);
+#   - `job-stats-recorder` resolves the `./recorder` subpath: the Host half that
+#     records terminal job outcomes, because a collected command's record leaves
+#     the roster before the browser can see how it ended. A subpath specifier is
+#     deliberately invisible to the client-module scanner, so the two rows cannot
+#     claim the same browser module.
 - insert:
     - id: job-stats
       name: 'dsh-client-ui-job-stats'
+    - id: job-stats-recorder
+      name: 'dsh-client-ui-job-stats/recorder'

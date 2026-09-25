@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { act, render } from '@testing-library/react';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createContext, entryOf, format, materialize } from './support/harness.js';
 
 /** The tab type this plugin owns, and the key its seats register under. */
@@ -519,5 +519,137 @@ describe('accumulated ledger', () => {
     expect(figure(view.container, 'metric', 'completed')).toBe('1');
     expect(view.container.textContent).toContain('上次的已完成');
     expect(view.container.textContent).not.toContain('上次遗留的运行中');
+  });
+});
+
+describe('host-recorded outcomes', () => {
+  /** One outcome record as the recorder row serves it. */
+  function outcome(overrides = {}) {
+    return {
+      id: 'collected',
+      sessionId: 'session-tab',
+      kind: 'pwsh',
+      label: 'pnpm install',
+      status: 'completed',
+      detail: 'exit code: 0',
+      startedAt: BASE,
+      finishedAt: BASE + 12_000,
+      bytes: 2_048,
+      ...overrides,
+    };
+  }
+
+  /** A fetch stub answering each call with the next queued outcome list. */
+  function stubRoute(answers) {
+    const calls = [];
+    const queue = [...answers];
+    vi.stubGlobal('fetch', (url) => {
+      calls.push(String(url));
+      const outcomes = queue.length > 1 ? queue.shift() : queue[0];
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ schema: 'dsh-job-stats/outcomes/v1', outcomes }) });
+    });
+    return calls;
+  }
+
+  /** Mount the panel and let its first outcomes sync settle. */
+  async function mountWithRoute(options, answers) {
+    const calls = stubRoute(answers);
+    const harness = createContext(options);
+    const { face } = materialize();
+    harness.declareFrame();
+    face.apply(harness.ctx);
+    const { Component, props } = dockProps(harness, options.sessionKey ?? 'session-tab');
+    let view;
+    await act(async () => {
+      view = render(React.createElement(Component, props));
+    });
+    return { harness, Component, props, view, calls };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test('turns a row the roster abandoned into its real outcome', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = BASE;
+      const { harness, view } = await mountWithRoute({
+        rows: { 'session-tab': [job({ id: 'collected', label: 'pnpm install', status: 'running', startedAt: started, finishedAt: undefined })] },
+      }, [[]]);
+      expect(figure(view.container, 'metric', 'running')).toBe('1');
+
+      // The Host retires the record before any frame can carry its settlement…
+      act(() => {
+        harness.roster.set('session-tab', []);
+      });
+      expect(figure(view.container, 'metric', 'ended')).toBe('1');
+      expect(view.container.textContent).toContain('结果未上报');
+
+      // …and the next sync replaces the guess with what actually happened.
+      stubRoute([[outcome()]]);
+      await act(async () => {
+        vi.advanceTimersByTime(2_100);
+      });
+      expect(figure(view.container, 'metric', 'ended')).toBe('0');
+      expect(figure(view.container, 'metric', 'completed')).toBe('1');
+      expect(figure(view.container, 'metric', 'failed')).toBe('0');
+      const [row] = rows(view.container);
+      expect(row.getAttribute('data-status')).toBe('completed');
+      expect(row.textContent).toContain('已完成');
+      expect(row.textContent).toContain('exit code: 0');
+      expect(row.textContent).not.toContain('结果未上报');
+      expect(row.textContent).toContain('12秒');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('adds a job this tab never saw, with its outcome', async () => {
+    const { view } = await mountWithRoute({ rows: {} }, [[outcome({ id: 'before', label: '别处跑完的命令', status: 'failed', detail: 'exit 1' })]]);
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(figure(view.container, 'metric', 'failed')).toBe('1');
+    expect(view.container.textContent).toContain('别处跑完的命令');
+  });
+
+  test('a stale roster frame cannot downgrade a reported outcome', async () => {
+    const started = BASE;
+    const { harness, view } = await mountWithRoute({ rows: {} }, [[outcome({ startedAt: started, finishedAt: started + 4_000 })]]);
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+
+    // A frame produced before the settlement, delivered after it (two channels).
+    act(() => {
+      harness.roster.set('session-tab', [job({ id: 'collected', label: 'pnpm install', status: 'running', startedAt: started, finishedAt: undefined })]);
+    });
+    expect(figure(view.container, 'metric', 'running')).toBe('0');
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+    expect(rows(view.container)[0].textContent).toContain('已完成');
+  });
+
+  test('asks the route document-relatively, so a mounted prefix still resolves', async () => {
+    const base = document.createElement('base');
+    base.href = 'http://localhost:3000/app/my-dsh/';
+    document.head.append(base);
+    try {
+      const { calls } = await mountWithRoute({ rows: {} }, [[]]);
+      expect(calls[0]).toBe('/app/my-dsh/dsh-job-stats/outcomes?sessionId=session-tab');
+    } finally {
+      base.remove();
+    }
+  });
+
+  test('a missing recorder leaves the panel on the roster’s own story', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('no recorder row')));
+    const harness = createContext({ rows: { 'session-tab': [job({ id: 'solo', label: '照常显示' })] } });
+    const { face } = materialize();
+    harness.declareFrame();
+    face.apply(harness.ctx);
+    const { Component, props } = dockProps(harness, 'session-tab');
+    let view;
+    await act(async () => {
+      view = render(React.createElement(Component, props));
+    });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(view.container.textContent).toContain('照常显示');
   });
 });
