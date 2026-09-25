@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-09-25
+
+### Fixed
+
+- **The detail list scrolls again.** The dock hands a tab body a fixed-height flex column with `overflow: hidden`, and the panel's own list block (also `overflow: hidden`, and free to shrink) absorbed the shortfall: it clipped its rows and left the wheel nothing to move. The panel body now keeps `min-height: 0`, the metrics and figures are `flex: none`, and the row list is the scroll region (`flex: 1 1 auto; min-height: 0; overflow-y: auto`) — so the head stays put and every task is reachable by scrolling.
+
+### Changed
+
+- A row whose outcome is unknown reads **已结束 / ended** and nothing more: the previous *outcome not reported* suffix said the same thing twice on every such row. The success-rate tooltip still explains that it counts reported outcomes only.
+
 ## [1.2.0] — 2026-09-25
 
 ### Added

@@ -30,7 +30,7 @@ This plugin adds a **statistics** seat next to it, inside the right Sidebar:
 |---|---|
 | Counts | 合计 / 运行中 / 已完成 / 已失败 / 已取消 / 已结束 (total / running / completed / failed / cancelled / ended) |
 | Figures | success rate over reported outcomes (completed ÷ settled), accumulated duration, longest single job, retained output bytes |
-| Detail list | one row per task: status dot, command label, kind · status · reason, elapsed time |
+| Detail list | one row per task: status dot, command label, kind · status · reason, elapsed time; the list scrolls on its own, with a pinned head |
 | Live clock | running jobs tick once a second while the tab is open |
 | Ledger | per-session, merged by job id, persisted in browser storage (300 records, oldest settled evicted first) |
 | Defensive | unknown statuses, missing ids, forged fields and an unreadable ledger never throw and never blank the tab |
@@ -88,7 +88,7 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 ### Known limits
 
 - The ledger records what the tab saw **while it was open**, plus what the Host recorder reports. A job that starts and ends entirely while the tab is closed *and* has already fallen out of the recorder's ring cannot be counted.
-- **Before the Host half is composed** (no restart yet, or a composition without a web server), a collected command's outcome is not observable: its record is removed as soon as the call collected the output, often inside the coalescing window that would have reported the settlement. Those rows are shown as **已结束 / ended** with *outcome not reported* rather than being guessed into 已完成 or 已失败, and the success-rate figure then covers reported outcomes only.
+- **Before the Host half is composed** (no restart yet, or a composition without a web server), a collected command's outcome is not observable: its record is removed as soon as the call collected the output, often inside the coalescing window that would have reported the settlement. Those rows are shown as **已结束 / ended** — no success, no failure, no running — and the success-rate figure then covers reported outcomes only.
 - An ended record still waiting for its outcome has its duration measured from its start to its last sighting (when the Host retired it, within a second or so).
 - The ledger is capped at 300 records per session; the oldest settled records are evicted first. The recorder's ring is capped at 2000 settlements per process.
 - The panel is read-only: stopping a job stays in the session header's job list.

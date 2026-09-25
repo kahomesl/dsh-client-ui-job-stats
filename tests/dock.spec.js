@@ -328,6 +328,34 @@ describe('dock panel', () => {
     }
   });
 
+  test('the detail list scrolls inside the panel instead of clipping its rows', () => {
+    // The dock hands a tab body a flex column with a definite height and
+    // `overflow: hidden`, so the panel's own scroll region has to be the row list:
+    // without `min-height: 0` on the way down, the list absorbs the shrink, clips
+    // its rows, and the wheel has nothing to move.
+    const { view } = renderDock([
+      job({ id: 'a', label: '第一条' }),
+      job({ id: 'b', label: '第二条' }),
+      job({ id: 'c', label: '第三条' }),
+    ]);
+    const body = view.container.querySelector('[data-role="dock-body"]');
+    expect(body.style.display).toBe('flex');
+    expect(body.style.flexDirection).toBe('column');
+    expect(['0', '0px']).toContain(body.style.minHeight);
+    expect(body.style.overflow).toBe('hidden');
+
+    const list = view.container.querySelector('[data-role="job-list"]');
+    expect(list.style.flex).toBe('1 1 auto');
+    expect(['0', '0px']).toContain(list.style.minHeight);
+    // The head keeps its place while the rows move under it (`none` serializes as
+    // its longhands in some DOM implementations).
+    expect(list.firstElementChild.style.flex).toMatch(/^(none|0 0 auto)$/u);
+    const scroll = list.querySelector('ul');
+    expect(scroll.style.overflowY).toBe('auto');
+    expect(['0', '0px']).toContain(scroll.style.minHeight);
+    expect(rows(view.container)).toHaveLength(3);
+  });
+
   test('the strip title draws this plugin’s glyph before the label', () => {
     const { harness } = mount({ sessionKey: 'session-1' });
     const entry = entryOf(harness.core, 'sidebar.right.pane.tab.title', (options) => options.key === TAB_ID);
@@ -422,12 +450,12 @@ describe('accumulated ledger', () => {
       expect(figure(view.container, 'metric', 'ended')).toBe('1');
       expect(figure(view.container, 'metric', 'completed')).toBe('0');
       expect(figure(view.container, 'metric', 'failed')).toBe('0');
-      // The row says it ended and that the outcome was never reported, rather than
-      // claiming success, failure, or that it is still running.
+      // The row says it ended — not that it is still running — and adds no guess
+      // about an outcome nobody reported.
       const [row] = rows(view.container);
       expect(row.getAttribute('data-status')).toBe('ended');
       expect(row.textContent).toContain('已结束');
-      expect(row.textContent).toContain('结果未上报');
+      expect(row.textContent).not.toContain('结果未上报');
 
       // Its clock stops at the last sighting instead of counting up forever.
       vi.setSystemTime(Date.now() + 300_000);
@@ -584,7 +612,9 @@ describe('host-recorded outcomes', () => {
         harness.roster.set('session-tab', []);
       });
       expect(figure(view.container, 'metric', 'ended')).toBe('1');
-      expect(view.container.textContent).toContain('结果未上报');
+      // Nothing invented about the outcome it does not have yet.
+      expect(view.container.textContent).not.toContain('结果未上报');
+      expect(rows(view.container)[0].textContent).toContain('已结束');
 
       // …and the next sync replaces the guess with what actually happened.
       stubRoute([[outcome()]]);

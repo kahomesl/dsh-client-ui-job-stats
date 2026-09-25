@@ -43,7 +43,7 @@ window.__ModuleLoader__.load({
       metricKilled: '已取消',
       metricEnded: '已结束',
       statSuccessRate: '完成率',
-      statSuccessRateHint: '仅统计已上报结果的任务（不含结果未上报的已结束任务）',
+      statSuccessRateHint: '仅统计已上报结果的任务（不含结局未知的已结束任务）',
       statElapsed: '累计耗时',
       statLongest: '最长耗时',
       statOutput: '保留输出',
@@ -63,7 +63,6 @@ window.__ModuleLoader__.load({
       statusKilled: '已取消',
       statusEnded: '已结束',
       statusUnknown: '状态未知',
-      detailUnreported: '结果未上报',
       rowUntitled: '（未命名任务）',
       rowUnknownKind: '未知类型',
       durationUnknown: '—',
@@ -107,7 +106,6 @@ window.__ModuleLoader__.load({
       statusKilled: 'cancelled',
       statusEnded: 'ended',
       statusUnknown: 'unknown status',
-      detailUnreported: 'outcome not reported',
       rowUntitled: '(untitled job)',
       rowUnknownKind: 'unknown kind',
       durationUnknown: '—',
@@ -381,8 +379,8 @@ window.__ModuleLoader__.load({
      * that would have reported its settlement, so no frame ever carries the
      * outcome. A record this tab saw running and that the roster no longer lists is
      * therefore projected as `ended`: it is over, its clock stops at the last
-     * sighting, and the panel says the outcome was not reported instead of claiming
-     * it is still running.
+     * sighting, and the row says it ended rather than claiming it is still running
+     * (an outcome the Host recorder reports later replaces it outright).
      * @param sessionId - the session the tab belongs to.
      * @param liveIds - ids the current roster still lists.
      * @returns the records, unordered.
@@ -396,7 +394,7 @@ window.__ModuleLoader__.load({
       const rows = [];
       for (const record of entry.records.values()) {
         rows.push(isLive(record) && !liveIds.has(record.id)
-          ? { ...record, status: 'ended', finishedAt: record.seenAt, unreported: true }
+          ? { ...record, status: 'ended', finishedAt: record.seenAt }
           : record);
       }
       return rows;
@@ -593,8 +591,7 @@ window.__ModuleLoader__.load({
       const rawKind = job === null || typeof job !== 'object' ? undefined : job.kind;
       const kind = typeof rawKind === 'string' && rawKind !== '' ? rawKind : t('rowUnknownKind');
       const statusText = t(statusLabelKey(status));
-      const reported = jobDetail(job);
-      const detail = reported === undefined && job?.unreported === true ? t('detailUnreported') : reported;
+      const detail = jobDetail(job);
       const meta = detail === undefined ? `${kind} · ${statusText}` : `${kind} · ${statusText} · ${detail}`;
       const elapsed = durationMs(job, now);
       return h('li', {
@@ -870,7 +867,12 @@ window.__ModuleLoader__.load({
       body: {
         boxSizing: 'border-box',
         height: '100%',
-        overflow: 'auto',
+        // The dock hands a tab body a flex column with `height: 100%` and
+        // `overflow: hidden`. Without `min-height: 0` here the panel's own
+        // children absorb the shrink — the detail list clips its rows and nothing
+        // is scrollable.
+        minHeight: 0,
+        overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -881,6 +883,7 @@ window.__ModuleLoader__.load({
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
         gap: '8px',
+        flex: 'none',
       },
       card: {
         display: 'flex',
@@ -910,6 +913,7 @@ window.__ModuleLoader__.load({
         padding: '10px 10px',
         borderRadius: 'var(--dsw-radius-md, 8px)',
         border: '1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.24))',
+        flex: 'none',
       },
       figure: {
         display: 'flex',
@@ -934,6 +938,10 @@ window.__ModuleLoader__.load({
       list: {
         display: 'flex',
         flexDirection: 'column',
+        // Takes the room the cards and figures leave and scrolls its own rows, so
+        // the head stays put and the wheel always has something to move.
+        flex: '1 1 auto',
+        minHeight: 0,
         borderRadius: 'var(--dsw-radius-md, 8px)',
         border: '1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.24))',
         overflow: 'hidden',
@@ -945,6 +953,7 @@ window.__ModuleLoader__.load({
         gap: '10px',
         padding: '8px 10px',
         borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.24))',
+        flex: 'none',
       },
       listTitle: {
         fontSize: '12px',
@@ -960,6 +969,10 @@ window.__ModuleLoader__.load({
         listStyle: 'none',
         margin: 0,
         padding: 0,
+        flex: '1 1 auto',
+        minHeight: 0,
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',
       },
       row: {
         display: 'flex',
