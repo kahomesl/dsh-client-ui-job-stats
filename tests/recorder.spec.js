@@ -12,7 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Context } from '@deepseek-ai/cordis';
-import { apply, inject, ledgerPathFor, name, resolveHome } from '../lib/recorder.js';
+import { apply, assertImportFits, inject, ledgerPathFor, name, resolveHome } from '../lib/recorder.js';
 
 /**
  * The ledger resolves its file from the host's own facts, so every spec runs
@@ -170,6 +170,8 @@ describe('the recorder row', () => {
     expect(answer.headers['cache-control']).toBe('no-store');
     expect(answer.json().schema).toBe('dsh-job-stats/outcomes/v1');
     expect(answer.json().outcomes).toEqual([{
+      key: expect.stringMatching(/:session-a:pwsh-1$/u),
+      bootId: expect.any(String),
       id: 'pwsh-1',
       sessionId: 'session-a',
       kind: 'pwsh',
@@ -606,6 +608,151 @@ describe('the ledger file format', () => {
     expect(typeof block.boot).toBe('string');
     // The records themselves are unchanged: the extra block is additive.
     expect(host.get('/dsh-job-stats/outcomes').json().schema).toBe('dsh-job-stats/outcomes/v1');
+  });
+});
+
+describe('identity across Host boots', () => {
+  const close = (host) => {
+    for (const dispose of [...host.effects].reverse()) dispose();
+  };
+
+  test('two host boots may both contain pwsh-1 without overwriting each other', () => {
+    const first = createHost();
+    apply(first.ctx);
+    first.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', startedAt: 100, finishedAt: 200 }) });
+    close(first);
+    const second = createHost();
+    apply(second.ctx);
+    second.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', startedAt: 300, finishedAt: 400 }) });
+    close(second);
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'));
+    expect(ledger.schema).toBe('dsh-job-stats/ledger/v2');
+    expect(ledger.records.map((record) => record.id)).toEqual(['pwsh-1', 'pwsh-1']);
+    expect(new Set(ledger.records.map((record) => record.key)).size).toBe(2);
+    expect(ledger.records[0].bootId).not.toBe(ledger.records[1].bootId);
+  });
+
+  test('same session survives restart with repeated job ids', () => {
+    for (const offset of [0, 10_000]) {
+      const host = createHost();
+      apply(host.ctx);
+      for (let n = 1; n <= 2; n += 1) {
+        host.emit({ type: 'settled', job: settledJob({ id: `pwsh-${n}`, startedAt: offset + n, finishedAt: offset + n + 10 }) });
+      }
+      close(host);
+    }
+    expect(fileRecords().map((record) => record.id)).toEqual(['pwsh-1', 'pwsh-2', 'pwsh-1', 'pwsh-2']);
+    const third = createHost();
+    apply(third.ctx);
+    expect(third.get('/dsh-job-stats/outcomes?sessionId=session-a').json().outcomes).toHaveLength(4);
+    close(third);
+  });
+
+  test('different sessions never collide when id is repeated in the same registry', () => {
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', owner: 'session-a' }) });
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', owner: 'session-b' }) });
+    close(host);
+    expect(fileRecords()).toHaveLength(2);
+    expect(new Set(fileRecords().map((record) => record.key)).size).toBe(2);
+  });
+
+  test('unowned job identity cannot collide with a session named _unowned_', () => {
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', owner: undefined }) });
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', owner: '_unowned_' }) });
+    close(host);
+    expect(fileRecords()).toHaveLength(2);
+    expect(new Set(fileRecords().map((record) => record.key)).size).toBe(2);
+    expect(fileRecords().map((record) => record.sessionId)).toEqual([null, '_unowned_']);
+  });
+
+  test('200-record pruning still uses oldest finishedAt rather than canonical key order', () => {
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'late', finishedAt: 5000 }) });
+    host.emit({ type: 'settled', job: settledJob({ id: 'early', finishedAt: 1 }) });
+    for (let n = 0; n < 199; n += 1) {
+      host.emit({ type: 'settled', job: settledJob({ id: `item-${n}`, finishedAt: n + 2 }) });
+    }
+    close(host);
+    const ids = fileRecords().map((record) => record.id);
+    expect(ids).toHaveLength(200);
+    expect(ids).toContain('late');
+    expect(ids).not.toContain('early');
+  });
+
+  test('a v1 ledger loads into v2 without discarding surviving records', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify({ schema: 'dsh-job-stats/ledger/v1', records: [
+      { id: 'pwsh-1', sessionId: 'session-a', status: 'completed', startedAt: 100, finishedAt: 200 },
+    ] }));
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', startedAt: 300, finishedAt: 400 }) });
+    close(host);
+    expect(fileRecords()).toHaveLength(2);
+    expect(fileRecords()[0].key).toMatch(/^legacy-v1:session-a:pwsh-1$/u);
+  });
+
+  test('refuses a full session or 33rd session before a staged import is acknowledged', () => {
+    const existing = Array.from({ length: 200 }, (_, index) => ({ key: `new-${index}`, sessionId: 'session-a' }));
+    expect(() => assertImportFits(existing, [{ key: 'old', sessionId: 'session-a' }])).toThrow(/200 records/u);
+    const sessions = Array.from({ length: 32 }, (_, index) => ({ key: `new-${index}`, sessionId: `session-${index}` }));
+    expect(() => assertImportFits(sessions, [{ key: 'old', sessionId: 'extra' }])).toThrow(/33 sessions/u);
+  });
+
+  test('a legal staged import above 8 MiB still loads under the 200/32 caps', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    const bootId = 'legacy-import-large';
+    const records = [];
+    for (let session = 0; session < 32; session += 1) {
+      for (let index = 0; index < 200; index += 1) {
+        records.push({ id: `pwsh-${index}`, sessionId: `session-${session}`, kind: 'pwsh',
+          label: 'x'.repeat(1500), status: 'completed', startedAt: index + 1, finishedAt: index + 2 });
+      }
+    }
+    const stage = `${ledgerPath}.legacy-import.json`;
+    writeFileSync(stage, JSON.stringify({ schema: 'dsh-job-stats/legacy-import/v1', bootId, records }));
+    expect(readFileSync(stage).length).toBeGreaterThan(8 * 1024 * 1024);
+    const host = createHost();
+    apply(host.ctx);
+    expect(host.get('/dsh-job-stats/outcomes?sessionId=session-0').json().outcomes).toHaveLength(200);
+    expect(fileRecords()).toHaveLength(6400);
+    expect(existsSync(stage)).toBe(false);
+    for (const dispose of [...host.effects].reverse()) dispose();
+  });
+
+  test('rejects empty owner rather than write a key that restart drops', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    const stage = `${ledgerPath}.legacy-import.json`;
+    writeFileSync(stage, JSON.stringify({ schema: 'dsh-job-stats/legacy-import/v1', bootId: 'legacy-import-bad', records: [
+      { id: 'pwsh-1', sessionId: '', status: 'completed', startedAt: 1, finishedAt: 2 },
+    ] }));
+    const host = createHost();
+    apply(host.ctx);
+    expect(host.get('/dsh-job-stats/outcomes').json().outcomes).toHaveLength(0);
+    expect(existsSync(stage)).toBe(true);
+    for (const dispose of [...host.effects].reverse()) dispose();
+  });
+
+  test('staged legacy Host backup imports once without overwriting fresh jobs', () => {
+    const host = createHost();
+    apply(host.ctx);
+    host.emit({ type: 'settled', job: settledJob({ id: 'pwsh-1', startedAt: 300, finishedAt: 400 }) });
+    const stage = `${ledgerPath}.legacy-import.json`;
+    writeFileSync(stage, JSON.stringify({ schema: 'dsh-job-stats/legacy-import/v1', bootId: 'legacy-import-20260925-232958', records: [
+      { id: 'pwsh-1', sessionId: 'session-a', kind: 'pwsh', label: 'old', status: 'completed', startedAt: 100, finishedAt: 200, bytes: 1 },
+    ] }));
+    const answer = host.get('/dsh-job-stats/outcomes?sessionId=session-a').json();
+    expect(answer.outcomes).toHaveLength(2);
+    expect(answer.outcomes.map((record) => record.id)).toEqual(['pwsh-1', 'pwsh-1']);
+    expect(fileRecords()).toHaveLength(2);
+    expect(existsSync(stage)).toBe(false);
+    expect(host.get('/dsh-job-stats/outcomes').json().outcomes).toHaveLength(2);
+    close(host);
   });
 });
 

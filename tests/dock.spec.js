@@ -827,7 +827,7 @@ describe('recovery and durability', () => {
 
   test('the accumulated ledger publishes its last batch after the window', async () => {
     vi.useFakeTimers();
-    const key = 'dsh-job-stats/v2/session-ledger';
+    const key = 'dsh-job-stats/v3/session-ledger';
     const { harness } = await mountPanel({
       rows: { 'session-ledger': [job({ id: 'first', label: '第一条' })] },
       sessionKey: 'session-ledger',
@@ -848,9 +848,114 @@ describe('recovery and durability', () => {
     expect(JSON.parse(window.localStorage.getItem(key)).map((record) => record.id)).toEqual(['first', 'second']);
   });
 
+  test('browser v2 to v3 migration preserves surviving history and leaves v2 intact', async () => {
+    const session = 'session-migration';
+    const legacy = { id: 'pwsh-1', kind: 'pwsh', label: 'old', status: 'completed', startedAt: BASE, finishedAt: BASE + 1, bytes: 0, seenAt: BASE + 1 };
+    window.localStorage.setItem(`dsh-job-stats/v2/${session}`, JSON.stringify([legacy]));
+    const { view } = await mountPanel({ rows: {}, sessionKey: session });
+    expect(view.container.textContent).toContain('old');
+    const migrated = JSON.parse(window.localStorage.getItem(`dsh-job-stats/v3/${session}`));
+    expect(migrated).toHaveLength(1);
+    expect(migrated[0]).toMatchObject({ id: 'pwsh-1', key: expect.stringMatching(/^legacy:/u) });
+    expect(JSON.parse(window.localStorage.getItem(`dsh-job-stats/v2/${session}`))).toEqual([legacy]);
+  });
+
+  test('failed v3 migration leaves v2 history intact for the next mount', async () => {
+    const session = 'session-migrate-failure';
+    const key = `dsh-job-stats/v2/${session}`;
+    const old = { id: 'pwsh-1', status: 'completed', startedAt: BASE, finishedAt: BASE + 1, seenAt: BASE + 1 };
+    window.localStorage.setItem(key, JSON.stringify([old]));
+    const original = Storage.prototype.setItem;
+    const blocked = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (name, value) {
+      if (name.startsWith('dsh-job-stats/v3/')) throw new Error('quota exceeded');
+      return original.call(this, name, value);
+    });
+    const { view } = await mountPanel({ rows: {}, sessionKey: session });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(window.localStorage.getItem(`dsh-job-stats/v3/${session}`)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(key))).toEqual([old]);
+    blocked.mockRestore();
+    // Re-materializing the bundle models a page reload: the intact v2 survives.
+    await mountPanel({ rows: {}, sessionKey: session });
+    expect(JSON.parse(window.localStorage.getItem(`dsh-job-stats/v3/${session}`))).toHaveLength(1);
+  });
+
+  test('imported canonical outcome upgrades a matching migrated v2 record', async () => {
+    const session = 'session-legacy-upgrade';
+    window.localStorage.setItem(`dsh-job-stats/v2/${session}`, JSON.stringify([
+      { id: 'pwsh-1', label: 'old', status: 'completed', startedAt: BASE, finishedAt: BASE + 12000, seenAt: BASE + 12000 },
+    ]));
+    stubFlakyRoute([{ ...outcome({ sessionId: session, id: 'pwsh-1', label: 'old', startedAt: BASE }),
+      key: 'legacy-import-abc:session-legacy-upgrade:pwsh-1', bootId: 'legacy-import-abc' }], 0);
+    const { view } = await mountPanel({ rows: {}, sessionKey: session });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    act(() => { window.dispatchEvent(new Event('pagehide')); });
+    expect(JSON.parse(window.localStorage.getItem(`dsh-job-stats/v3/${session}`))).toEqual([
+      expect.objectContaining({ key: 'legacy-import-abc:session-legacy-upgrade:pwsh-1' }),
+    ]);
+  });
+
+  test('new pwsh-1 does not replace migrated legacy pwsh-1', async () => {
+    const session = 'session-collision';
+    window.localStorage.setItem(`dsh-job-stats/v2/${session}`, JSON.stringify([
+      { id: 'pwsh-1', kind: 'pwsh', label: 'old', status: 'completed', startedAt: BASE, finishedAt: BASE + 1, bytes: 0, seenAt: BASE + 1 },
+    ]));
+    stubFlakyRoute([{ ...outcome({ sessionId: session, id: 'pwsh-1', label: 'new', startedAt: BASE + 10000 }), key: 'boot-abc:session-collision:pwsh-1', bootId: 'boot-abc' }], 0);
+    const { view } = await mountPanel({ rows: {}, sessionKey: session });
+    expect(figure(view.container, 'metric', 'total')).toBe('2');
+    expect(view.container.textContent).toContain('old');
+    expect(view.container.textContent).toContain('new');
+  });
+
+  test('provisional live row upgrades to canonical outcome without duplication', async () => {
+    vi.useFakeTimers();
+    const session = 'session-upgrade';
+    let outcomes = [];
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ outcomes }) }));
+    const { view } = await mountPanel({ rows: { [session]: [job({ id: 'pwsh-1', status: 'running', startedAt: BASE, finishedAt: undefined })] }, sessionKey: session });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    fireEvent.click(rows(view.container)[0].querySelector('button'));
+    expect(rows(view.container)[0].querySelector('button').getAttribute('aria-expanded')).toBe('true');
+    outcomes = [{ ...outcome({ sessionId: session, id: 'pwsh-1', startedAt: BASE }), key: 'boot-abc:session-upgrade:pwsh-1', bootId: 'boot-abc' }];
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+    expect(JSON.parse(window.localStorage.getItem(`dsh-job-stats/v3/${session}`))).toEqual([
+      expect.objectContaining({ key: 'boot-abc:session-upgrade:pwsh-1', id: 'pwsh-1' }),
+    ]);
+    expect(rows(view.container)[0].querySelector('button').getAttribute('aria-expanded')).toBe('true');
+    expect(view.container.textContent).toContain('任务 ID');
+    expect(view.container.textContent).toContain('pwsh-1');
+    expect(view.container.textContent).not.toContain('boot-abc:session-upgrade:pwsh-1');
+  });
+
+  test('two canonical boots with equal raw id and startedAt stay separate', async () => {
+    const session = 'session-same-timestamp';
+    stubFlakyRoute([
+      { ...outcome({ sessionId: session, id: 'pwsh-1', startedAt: 0, label: 'older' }), key: 'boot-one:session-same-timestamp:pwsh-1', bootId: 'boot-one' },
+      { ...outcome({ sessionId: session, id: 'pwsh-1', startedAt: 0, label: 'newer' }), key: 'boot-two:session-same-timestamp:pwsh-1', bootId: 'boot-two' },
+    ], 0);
+    const { view } = await mountPanel({ rows: {}, sessionKey: session });
+    expect(figure(view.container, 'metric', 'total')).toBe('2');
+    expect(view.container.textContent).toContain('older');
+    expect(view.container.textContent).toContain('newer');
+  });
+
+  test('outcome before and after roster frame does not duplicate or downgrade', async () => {
+    const session = 'session-race';
+    stubFlakyRoute([{ ...outcome({ sessionId: session, id: 'pwsh-1', startedAt: BASE }), key: 'boot-abc:session-race:pwsh-1', bootId: 'boot-abc' }], 0);
+    const { harness, view } = await mountPanel({ rows: {}, sessionKey: session });
+    act(() => { harness.roster.set(session, [job({ id: 'pwsh-1', status: 'running', startedAt: BASE, finishedAt: undefined })]); });
+    expect(figure(view.container, 'metric', 'total')).toBe('1');
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+    act(() => { harness.roster.set(session, [job({ id: 'pwsh-1', status: 'running', startedAt: BASE + 10000, finishedAt: undefined })]); });
+    expect(figure(view.container, 'metric', 'total')).toBe('2');
+    expect(figure(view.container, 'metric', 'completed')).toBe('1');
+  });
+
   test('a page going away publishes a batch the window was still holding', async () => {
     vi.useFakeTimers();
-    const key = 'dsh-job-stats/v2/session-pagehide';
+    const key = 'dsh-job-stats/v3/session-pagehide';
     const { harness } = await mountPanel({
       rows: { 'session-pagehide': [job({ id: 'first' })] },
       sessionKey: 'session-pagehide',

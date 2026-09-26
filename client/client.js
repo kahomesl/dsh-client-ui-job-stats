@@ -724,7 +724,19 @@ window.__ModuleLoader__.load({
      * stream behind it any more, and the roster re-supplies it when the job is still
      * alive), and the Host's own removal semantics are projected as `ended`.
      */
-    const LEDGER_KEY = 'dsh-job-stats/v2/';
+    const PREVIOUS_LEDGER_KEY = 'dsh-job-stats/v2/';
+    const LEDGER_KEY = 'dsh-job-stats/v3/';
+    /** Keep raw ids visible, but never use one as a persistent ledger identity. */
+    function provisionalKey(sessionId, id, startedAt) {
+      return `live:${encodeURIComponent(sessionId)}:${encodeURIComponent(id)}:${String(startedAt)}`;
+    }
+    function legacyKey(sessionId, record) {
+      return `legacy:${encodeURIComponent(sessionId)}:${encodeURIComponent(record.id)}:${String(record.startedAt ?? 0)}:${String(record.finishedAt ?? 'none')}`;
+    }
+    /** The same task across roster and outcomes, never just a matching raw id. */
+    function matchingRecords(entry, id, startedAt) {
+      return [...entry.records.entries()].filter(([, record]) => record.id === id && record.startedAt === startedAt);
+    }
     /** Shortest gap between two browser-storage writes while records keep arriving. */
     const LEDGER_INTERVAL_MS = 1000;
     /** Longest delay before retrying a browser-storage write that was rejected. */
@@ -756,21 +768,38 @@ window.__ModuleLoader__.load({
         lastError: null,
       };
       ledgers.set(sessionId, entry);
+      let v3;
       try {
         const raw = window.localStorage?.getItem(LEDGER_KEY + sessionId);
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : undefined;
-        if (Array.isArray(parsed)) {
-          for (const record of parsed) {
-            if (record === null || typeof record !== 'object') continue;
-            if (typeof record.id !== 'string' || record.id === '') continue;
-            // Only terminal records survive a reload: one hydrated as running has no
-            // stream behind it any more, and the roster re-supplies it while alive.
-            if (isLive(record) || statusOf(record) === 'unknown') continue;
-            entry.records.set(record.id, record);
-          }
-        }
+        v3 = typeof raw === 'string' ? JSON.parse(raw) : undefined;
       } catch {
-        /* an unreadable or unavailable store starts empty rather than failing the tab */
+        // A corrupt v3 does not destroy surviving v2 history.
+      }
+      if (Array.isArray(v3)) {
+        for (const record of v3) {
+          if (record === null || typeof record !== 'object' || typeof record.id !== 'string' || record.id === '') continue;
+          if (isLive(record) || statusOf(record) === 'unknown') continue;
+          if (typeof record.key !== 'string' || record.key === '') continue;
+          entry.records.set(record.key, record);
+        }
+      } else {
+        try {
+          const raw = window.localStorage?.getItem(PREVIOUS_LEDGER_KEY + sessionId);
+          const v2 = typeof raw === 'string' ? JSON.parse(raw) : undefined;
+          if (Array.isArray(v2)) {
+            for (const record of v2) {
+              if (record === null || typeof record !== 'object' || typeof record.id !== 'string' || record.id === '') continue;
+              if (isLive(record) || statusOf(record) === 'unknown') continue;
+              const key = legacyKey(sessionId, record);
+              entry.records.set(key, { ...record, key, uiKey: key });
+            }
+            // Migrate immediately. On failure keep v2 untouched, hold these rows
+            // in memory, and try again on a later reload or write.
+            writeLedger(sessionId, entry);
+          }
+        } catch {
+          /* no readable v2: an empty tab is safer than discarding its source */
+        }
       }
       return entry;
     }
@@ -813,7 +842,7 @@ window.__ModuleLoader__.load({
         .sort((left, right) => (left.finishedAt ?? left.seenAt) - (right.finishedAt ?? right.seenAt));
       for (const record of removable) {
         if (entry.records.size <= LEDGER_LIMIT) break;
-        entry.records.delete(record.id);
+        entry.records.delete(record.key);
       }
     }
 
@@ -911,16 +940,17 @@ window.__ModuleLoader__.load({
       for (const job of rows) {
         const record = ledgerRecord(job, seenAt);
         if (record.id === '') continue;
-        const previous = entry.records.get(record.id);
+        const matches = matchingRecords(entry, record.id, record.startedAt);
+        const [previousKey, previous] = matches.find(([, prior]) => typeof prior.bootId === 'string') ?? matches[0] ?? [];
         if (previous !== undefined && sameRecord(previous, record)) {
-          // A still-live row keeps its clock moving without dirtying the ledger.
           if (isLive(record)) previous.seenAt = seenAt;
           continue;
         }
-        // Never downgrade a record whose outcome the Host already reported: a roster
-        // frame produced before the settlement can arrive after it (two channels).
-        if (previous !== undefined && !isLive(previous) && isLive(record)) continue;
-        entry.records.set(record.id, record);
+        // The Host's reported outcome is authoritative regardless of which roster
+        // frame arrived first; a reused raw id with a different start is a new job.
+        if (previous !== undefined && !isLive(previous) && (isLive(record) || previous.bootId)) continue;
+        const key = previousKey ?? provisionalKey(sessionId, record.id, record.startedAt);
+        entry.records.set(key, { ...record, key, uiKey: previous?.uiKey ?? previous?.key ?? key });
         changed = true;
       }
       if (changed) {
@@ -941,14 +971,13 @@ window.__ModuleLoader__.load({
      * @param sessionId - the watched session.
      * @param liveIds - ids the current roster lists.
      */
-    function touch(sessionId, liveIds) {
-      if (sessionId === undefined || liveIds.size === 0) return;
+    function touch(sessionId, liveRefs) {
+      if (sessionId === undefined || liveRefs.size === 0) return;
       const entry = ledgers.get(sessionId);
       if (entry === undefined) return;
       const seenAt = Date.now();
-      for (const id of liveIds) {
-        const record = entry.records.get(id);
-        if (record !== undefined && isLive(record)) record.seenAt = seenAt;
+      for (const record of entry.records.values()) {
+        if (isLive(record) && liveRefs.has(provisionalKey(sessionId, record.id, record.startedAt))) record.seenAt = seenAt;
       }
     }
 
@@ -966,7 +995,7 @@ window.__ModuleLoader__.load({
      * @param liveIds - ids the current roster still lists.
      * @returns the records, unordered.
      */
-    function ledgerRows(sessionId, liveIds) {
+    function ledgerRows(sessionId, liveRefs) {
       if (sessionId === undefined) return NO_JOBS;
       // Read-through: the first read of a session hydrates its ledger from browser
       // storage, so a reloaded page shows the history before the first frame.
@@ -974,7 +1003,7 @@ window.__ModuleLoader__.load({
       if (entry.records.size === 0) return NO_JOBS;
       const rows = [];
       for (const record of entry.records.values()) {
-        rows.push(isLive(record) && !liveIds.has(record.id)
+        rows.push(isLive(record) && !liveRefs.has(provisionalKey(sessionId, record.id, record.startedAt))
           ? { ...record, status: 'ended', finishedAt: record.seenAt }
           : record);
       }
@@ -1107,20 +1136,33 @@ window.__ModuleLoader__.load({
         if (typeof outcome.id !== 'string' || outcome.id === '') continue;
         const status = outcome.status;
         if (status !== 'completed' && status !== 'failed' && status !== 'killed') continue;
+        const startedAt = typeof outcome.startedAt === 'number' && Number.isFinite(outcome.startedAt) ? outcome.startedAt : 0;
+        const key = typeof outcome.key === 'string' && outcome.key !== '' && typeof outcome.bootId === 'string'
+          ? outcome.key : legacyKey(sessionId, { ...outcome, startedAt });
         const record = {
+          key,
+          ...(typeof outcome.bootId === 'string' ? { bootId: outcome.bootId } : {}),
           id: outcome.id,
           kind: typeof outcome.kind === 'string' ? outcome.kind : '',
           label: typeof outcome.label === 'string' ? outcome.label : '',
           status,
-          startedAt: typeof outcome.startedAt === 'number' && Number.isFinite(outcome.startedAt) ? outcome.startedAt : 0,
+          startedAt,
           ...(typeof outcome.finishedAt === 'number' && Number.isFinite(outcome.finishedAt) ? { finishedAt: outcome.finishedAt } : {}),
           ...(typeof outcome.detail === 'string' && outcome.detail !== '' ? { detail: outcome.detail } : {}),
           bytes: typeof outcome.bytes === 'number' && Number.isFinite(outcome.bytes) && outcome.bytes > 0 ? outcome.bytes : 0,
           seenAt,
         };
-        const previous = entry.records.get(record.id);
+        const matches = matchingRecords(entry, record.id, record.startedAt);
+        const upgradeable = matches.filter(([otherKey]) => otherKey.startsWith('live:') || otherKey.startsWith('legacy:'));
+        const previous = entry.records.get(key);
+        record.uiKey = previous?.uiKey ?? upgradeable[0]?.[1].uiKey ?? upgradeable[0]?.[1].key ?? key;
+        for (const [otherKey] of upgradeable) {
+          if (otherKey === key) continue;
+          entry.records.delete(otherKey); // only provisional/legacy → canonical; another boot is a different job
+          changed = true;
+        }
         if (previous !== undefined && !isLive(previous) && sameRecord(previous, record)) continue;
-        entry.records.set(record.id, record);
+        entry.records.set(key, record);
         changed = true;
       }
       if (changed) {
@@ -1399,21 +1441,22 @@ window.__ModuleLoader__.load({
         if (remember(sessionId, liveRows)) setLedgerVersion((version) => version + 1);
       }, [sessionId, liveRows]);
 
-      const liveIds = React.useMemo(
-        () => new Set(liveRows.map((job) => String(job?.id ?? ''))),
-        [liveRows],
+      const liveRefs = React.useMemo(
+        () => new Set(liveRows.map((job) => provisionalKey(sessionId ?? '', String(job?.id ?? ''),
+          Number.isFinite(job?.startedAt) ? job.startedAt : 0))),
+        [sessionId, liveRows],
       );
       const rows = React.useMemo(
-        () => ledgerRows(sessionId, liveIds),
-        [sessionId, liveIds, ledgerVersion],
+        () => ledgerRows(sessionId, liveRefs),
+        [sessionId, liveRefs, ledgerVersion],
       );
       const live = liveRows.some(isLive);
 
       // Keep the clock of a running record honest while the roster lists it: a long
       // command produces no frame between its start and its settlement.
       React.useEffect(() => {
-        touch(sessionId, liveIds);
-      }, [sessionId, liveIds, now]);
+        touch(sessionId, liveRefs);
+      }, [sessionId, liveRefs, now]);
 
       React.useEffect(() => {
         if (sessionId === undefined || typeof watchRows !== 'function') return undefined;
@@ -1555,7 +1598,7 @@ window.__ModuleLoader__.load({
             h('span', { key: 'count', style: dockStyles.listCount }, t('listCount', { count: stats.total })),
           ]),
           h('ul', { key: 'rows', style: dockStyles.rows }, ordered.map((job, index) => h(JobRow, {
-            key: `${job === null || typeof job !== 'object' ? index : String(job.id ?? index)}#${index}`,
+            key: job === null || typeof job !== 'object' ? String(index) : String(job.uiKey ?? job.key ?? `${String(job.id ?? index)}#${index}`),
             job,
             now,
             t,

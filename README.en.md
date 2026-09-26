@@ -41,7 +41,7 @@ This plugin adds a **statistics** seat next to it, inside the right Sidebar:
 | Plain-language summaries | a recognised command reads as what it does — 等待 75 秒 / 提交代码 / 跑测试 / 安装依赖 — in the host language, instead of quoting the code |
 | Detail on demand | click a row to expand it: the full command, job id, kind, status, start and finish clock, terminal reason and retained output |
 | Live clock | running jobs tick once a second while the tab is open |
-| Ledger | per-session, merged by job id, persisted in browser storage (300 records, oldest settled evicted first) |
+| Ledger | per-session, keyed by provisional session/id/start then Host boot/owner/id; browser v3 retains 300 records, oldest settled evicted first |
 | Defensive | unknown statuses, missing ids, forged fields and an unreadable ledger never throw and never blank the tab |
 
 ## Install
@@ -90,8 +90,8 @@ git clone https://github.com/kahomesl/dsh-client-ui-job-stats.git
 The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/dsh-api-job-controller`), and adds a ledger on top:
 
 1. While the tab is mounted it holds the session's roster stream open (`ctx.jobs.watchRows(sessionId)`); the stream's first frame is already the whole truth.
-2. Every frame is merged into a per-session ledger keyed by job id — status, duration, terminal reason and retained bytes are updated in place, so a job never appears twice.
-3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. The ledger is persisted under `dsh-job-stats/v2/<sessionId>` in browser storage (throttled writes; a full or unreadable store degrades to memory only). Only terminal records are hydrated, so a reloaded page cannot resurrect a stale "running" row.
+2. A live row first uses a provisional `live:<sessionId>:<id>:<startedAt>` identity. The recorder stamps each terminal outcome with a boot UUID and uses `bootId:owner:id` as its persistent identity. A matching session/id/start upgrades the provisional row rather than showing two tasks; the UI still displays the raw `pwsh-1` job id. Restarts no longer overwrite older jobs with reused raw ids.
+3. Statistics and the list are computed from the ledger, which is why a finished task stays after the host removes its record. Browser storage uses `dsh-job-stats/v3/<sessionId>`; on first read, surviving v2 records migrate to stable legacy identities that cannot collide with a future boot. v2 is not deleted, and a failed v3 write leaves v2 intact for a later retry. Only terminal records are hydrated; previously overwritten history cannot be reconstructed.
 4. **Outcomes come from the Host.** The recorder row subscribes to the registry's `settled` events — the one witness of a collected command's terminal state — and keeps them **durably** in `.job-stats/ledger.json` inside the profile. The panel polls the route (`dsh-job-stats/outcomes`, resolved document-relatively against `document.baseURI`) every two seconds and merges what it reports: a row the roster abandoned becomes a real 已完成 / 已失败 / 已取消 with the terminal reason, and a job this tab never saw while it ran is added with its outcome. Because that ledger is the Host's, a panel opened after a restart still shows what the previous run settled — browser storage is not part of this path.
 
 ### The ledger file
@@ -102,8 +102,10 @@ The panel reads `ctx.jobs`, the client mirror of the job roster (`@deepseek-ai/d
 | Records | up to **200 per session**, oldest settlements dropped first; up to 32 sessions, the least recently settled dropped first |
 | Size | 200 records of realistic command lines ≈ **53 KB**; the worst case (every label at the 2000-character cap) ≈ 420 KB |
 | Writes | immediately when the one-second window has elapsed; settlements inside the window are merged into **one trailing write** at its end, so the last batch always reaches the file even if the process dies. The write serializes the live ledger (a late timer cannot publish stale records), `dirty` is cleared only by a write that landed, and a failed write is retried behind a bounded backoff. Unloading flushes at once and cancels the timer; temp file then rename, so a crash cannot leave it half written |
-| Reading it back | Only a file carrying this ledger's `schema` is read; a temporary file left by a kill between write and rename is promoted when the ledger itself is missing |
+| Reading it back | `dsh-job-stats/ledger/v2` keys by `key` and upgrades surviving v1 records; other schemas are ignored. A `.tmp` left by a kill between write and rename is recovered |
 | Deleting it | Always safe: it is a record of settled jobs, and the next settlements rebuild it. |
+
+**Recovering old Host memory**: before restart, back up the unfiltered `/dsh-job-stats/outcomes` with SHA-256 and Host PID/start time outside the repository. After upgrading and restarting, a one-time external script verifies the backup, first backs up the new ledger, checks 200/32 capacity and the 24 MiB bound, then stages it locally in the profile. The recorder imports and removes the staged file only after a successful durable write; there is **no permanent HTTP write API**. Reused `pwsh-1` ids stay separate across boots. An over-capacity import is rejected, never silently truncated.
 
 ### When something breaks
 
