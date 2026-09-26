@@ -738,6 +738,30 @@ describe('identity across Host boots', () => {
     for (const dispose of [...host.effects].reverse()) dispose();
   });
 
+  test('replaying the same staged import adds nothing', () => {
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    const staged = { schema: 'dsh-job-stats/legacy-import/v1', bootId: 'legacy-import-replay', records: [
+      { id: 'pwsh-1', sessionId: 'session-a', kind: 'pwsh', label: 'legacy', status: 'completed', startedAt: 100, finishedAt: 200 },
+    ] };
+    const stage = `${ledgerPath}.legacy-import.json`;
+    writeFileSync(stage, JSON.stringify(staged));
+    const first = createHost();
+    apply(first.ctx);
+    expect(first.get('/dsh-job-stats/outcomes').json().outcomes).toHaveLength(1);
+    expect(existsSync(stage)).toBe(false);
+    for (const dispose of [...first.effects].reverse()) dispose();
+
+    // A kill after the write but before the removal replays the same keys: the
+    // import is idempotent because identity is the canonical key, not the file.
+    writeFileSync(stage, JSON.stringify(staged));
+    const second = createHost();
+    apply(second.ctx);
+    expect(second.get('/dsh-job-stats/outcomes').json().outcomes).toHaveLength(1);
+    expect(existsSync(stage)).toBe(false);
+    expect(fileRecords()).toHaveLength(1);
+    for (const dispose of [...second.effects].reverse()) dispose();
+  });
+
   test('staged legacy Host backup imports once without overwriting fresh jobs', () => {
     const host = createHost();
     apply(host.ctx);

@@ -22,7 +22,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Tests
 
-- Identity and migration regressions extend the 1.4.3 suite to 101 specs (74 in 1.4.2): two boots with the same raw id, the same session across boots, different owners and unowned jobs, canonical ids with the same `startedAt`, v1 and browser v2 migration, v3 migration failure, live→canonical reconciliation in either event order, raw-id display, 200/32 retention, a bounded large staged import and a failed import that is not acknowledged. The earlier trailing-flush, lifecycle and polling-recovery tests remain.
+- Identity and migration regressions extend the 1.4.3 suite to 102 specs (74 in 1.4.2): two boots with the same raw id, the same session across boots, different owners and unowned jobs, canonical ids with the same `startedAt`, v1 and browser v2 migration, v3 migration failure, live→canonical reconciliation in either event order, raw-id display, 200/32 retention, a bounded large staged import, a rejected over-capacity import and a replayed import that adds nothing. The earlier trailing-flush, lifecycle and polling-recovery tests remain.
 - Recorder specs neutralise `DSH_PROFILE_DIR` in addition to pinning `DSH_HOME`/`DSH_PROFILE`, so a harness that exports it cannot write into a real profile's ledger.
 
 ### Notes
