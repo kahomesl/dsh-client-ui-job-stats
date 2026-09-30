@@ -167,7 +167,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the verification checklist used befor
 
 ## Compatibility
 
-Verified on DeepSeek Harness **0.1.7-rc.2** (DSH Desktop, Windows 11, 125 % display scaling): the Loader row composes, the host serves the browser half with a matching revision, and the card and panel render in the right Sidebar.
+| | |
+|---|---|
+| **Declared** | `>=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.1 <0.3.0` — `dsh.engines.dsh` in `package.json` |
+| **Verified** | `0.1.7-rc.2` (DSH Desktop, Windows 11, 125 % display scaling) and `0.2.0-rc.2` (the kernel the current desktop build ships, macOS) |
+| **Out of scope** | `0.3.0` and later |
+
+Re-checked on `0.2.0-rc.2`: both Loader rows compose, the host serves the browser half with a matching revision, the browser half registers the same Sidebar tab type and both seats (`sidebar.right.pane.tab` and `sidebar.right.pane.tab.title`), and `/dsh-job-stats/outcomes` answers with a ledger carrying the recorder health block.
+
+`dsh.engines.dsh` is a declaration, not a gate: the loading path reads `peerDependencies` on `@deepseek-ai/dsh*`, and this package declares none, so the field only states the range the author supports and has exercised.
+
+Why two alternatives: semver admits a prerelease version only when a comparator carries the *same* major.minor.patch with a prerelease of its own, so a single `>=0.1.7-rc.2 <0.3.0` reads `0.2.0-rc.2` as out of range under plain `semver.satisfies()`. The second alternative spells the 0.2.0 line's own prerelease floor, which puts both verified kernels in range under either reading.
 
 ## License
 

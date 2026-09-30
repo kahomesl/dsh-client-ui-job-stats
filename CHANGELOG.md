@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] — 2026-09-30
+
+### Added
+
+- **`dsh.engines.dsh` now declares the kernel range this plugin is supported on**: `>=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.1 <0.3.0`. The field is a declaration rather than a gate — the loading path reads `peerDependencies` on `@deepseek-ai/dsh*`, and this package declares none — so it exists to make the manifest state what the README's compatibility section already claimed. `tests/bundle.spec.js` pins both ends of the range.
+
+### Changed
+
+- **Re-verified against kernel `0.2.0-rc.2`** (the kernel the current desktop build ships), the release after `0.1.7-rc.2`. On an isolated `DSH_HOME` the two Loader rows compose, the boot graph carries the browser half with a matching revision and all three of its `dsh.client.inject` modules present, the browser half materializes from the module table and registers the same tab type plus both seats (`sidebar.right.pane.tab`, `sidebar.right.pane.tab.title`), the legacy-free Host half answers `/dsh-job-stats/outcomes` with a ledger carrying the recorder health block, and the summary route answers 204 for a session with nothing to report. No plugin code needed to change: `ctx.sidebarRightTabs.register`, `sidebar.right.pane.tab[.title]`, `ctx.jobs.watchRows`, `webServer.register` and the settled-event subscription are all present and unchanged in `0.2.0-rc.2`.
+- The compatibility section in both READMEs now states the declared range, the two verified kernels and the out-of-scope line, instead of naming only the kernel it happened to be checked on.
+
+### Notes
+
+- The `0.2.0-rc.2` pass above was run on macOS. The `0.1.7-rc.2` pass was on Windows 11 at 125 % display scaling, which is why the two README rows name their platforms.
+- This package's own version stays independent of the kernel version: `1.4.4` is this plugin, `0.2.0-rc.2` is the Harness kernel.
+- The declared range is written as two alternatives on purpose. semver admits a prerelease version only when a comparator carries that *same* major.minor.patch, so a single `>=0.1.7-rc.2 <0.3.0` would read `0.2.0-rc.2` — a kernel this release was verified against — as out of range. The 0.1.6 line stays out of scope because it was never exercised.
+
 ## [1.4.3] — 2026-09-26
 
 ### Fixed

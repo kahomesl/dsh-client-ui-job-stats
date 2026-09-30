@@ -161,7 +161,17 @@ pnpm test        # 34 个用例：包清单、标签类型与席位注册、面�
 
 ## 兼容性
 
-已在 DeepSeek Harness **0.1.7-rc.2**（DSH Desktop，Windows 11，125% 显示缩放）验证：Loader 行能组合、宿主按匹配的 revision 提供浏览器半侧、开始页卡片与栏内面板均正常渲染。
+| | |
+|---|---|
+| **声明支持** | `>=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.1 <0.3.0` —— `package.json` 里的 `dsh.engines.dsh` |
+| **实测通过** | `0.1.7-rc.2`（DSH Desktop，Windows 11，125% 显示缩放）与 `0.2.0-rc.2`（当前桌面版内核，macOS） |
+| **不在支持范围** | `0.3.0` 及之后 |
+
+在 `0.2.0-rc.2` 上逐项复验：Loader 两行能组合、宿主按匹配的 revision 提供浏览器半侧、浏览器半边照旧注册出同一个侧栏标签类型与两处槽位（`sidebar.right.pane.tab` 与 `sidebar.right.pane.tab.title`），宿主侧 `/dsh-job-stats/outcomes` 返回带 recorder 健康块的台账。
+
+`dsh.engines.dsh` 是声明而不是闸门：加载路径读的是 `peerDependencies` 里的 `@deepseek-ai/dsh*`，本包一个都没有声明，所以这个字段只表达"作者支持并实测过的范围"。
+
+范围为什么是两个区间：semver 只承认「比较符自身带着同一条 major.minor.patch 的预发布」的预发布版本，所以一段式的 `>=0.1.7-rc.2 <0.3.0` 用 `semver.satisfies()` 直接算，会把 `0.2.0-rc.2` 判成不在范围内。第二段显式写出 0.2.0 线自己的预发布起点，于是无论按默认语义还是 `includePrerelease` 语义读，两个实测内核都在范围内。
 
 ## 许可
 

@@ -29,6 +29,22 @@ describe('package manifest', () => {
     expect(existsSync(resolve(root, 'lib/recorder.js'))).toBe(true);
   });
 
+  test('declares the Harness kernel range it was verified against', () => {
+    const range = manifest.dsh.engines?.dsh ?? '';
+    // The floor is the oldest kernel this plugin has been exercised on. It is a
+    // declaration rather than a gate — the loader reads `peerDependencies` on
+    // `@deepseek-ai/dsh*`, not this field — so its only job is to say, in the
+    // manifest, what the README's compatibility section claims.
+    expect(range.startsWith('>=0.1.7-rc.2 <0.1.8')).toBe(true);
+    // The second alternative covers the 0.2.x line the current desktop build
+    // ships. It spells 0.2.0's own prerelease because a comparator admits no
+    // prerelease outside its major.minor.patch: without that alternative, plain
+    // semver reads 0.2.0-rc.2 as out of range even though it is one of the two
+    // kernels the README's compatibility section claims.
+    expect(range).toContain('>=0.2.0-rc.1 <0.3.0');
+    expect(range.endsWith('<0.3.0')).toBe(true);
+  });
+
   test('ships a bundle patch that inserts its two rows', () => {
     const patchPath = manifest.dsh.bundle.patch;
     expect(patchPath).toBe('./cordis.patch.yml');
